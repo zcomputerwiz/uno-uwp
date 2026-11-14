@@ -4,8 +4,10 @@
 // Application.LoadComponent for compiled XAML: the page's XBF is turned back into XAML text by XbfKit (MIT,
 // github.com/0x5bfa/XbfKit), connection IDs are noted and removed, Uno's XamlReader builds the content, and the
 // application's generated IComponentConnector.Connect receives each connected element (x:Name fields, event handlers).
-// Experiment limits: the XBF is read from <package root>\<Name>.xbf (reading it from resources.pri is next); only the
-// root's content is loaded (the root's own properties and resources are logged and skipped).
+// The XBF comes from the package's resources.pri (ms-appx:///Dir/Page.xaml is the resource Files/Dir/Page.xbf, embedded
+// data or a path), read with PriFormat (Apache-2.0, ../PriFormat); a loose <package root>\Dir\Page.xbf is the fallback.
+// Limits: the first candidate is taken (no qualifier matching; XAML pages normally have one); only the root's content
+// is loaded (the root's own properties and resources are logged and skipped).
 using System.Xml.Linq;
 using Mux = Microsoft.UI.Xaml;
 using UnoControls = Microsoft.UI.Xaml.Controls;
@@ -21,13 +23,21 @@ public static unsafe class XbfLoader
         var location = UriText(uri);
         var target = Ccw.Unwrap(component);
         Ccw.Log($"LoadComponent {location} into {target?.RuntimeClassName ?? "an unknown object"}");
-        var name = location[(location.LastIndexOf('/') + 1)..];
+        const string scheme = "ms-appx:///";
+        if (!location.StartsWith(scheme, StringComparison.OrdinalIgnoreCase)) { Ccw.Log($"unsupported location {location}"); return unchecked((int)0x80070057); }
+        var relative = Path.ChangeExtension(location[scheme.Length..], ".xbf");
         var root = Path.GetDirectoryName(Environment.ProcessPath) ?? ".";
-        var path = Path.Combine(root, Path.ChangeExtension(name, ".xbf"));
-        if (!File.Exists(path)) { Ccw.Log($"no {path}"); return unchecked((int)0x80070002); }
+        var xbf = FromPri(root, relative);
+        if (xbf == null)
+        {
+            var path = Path.Combine(root, relative.Replace('/', '\\'));
+            if (!File.Exists(path)) { Ccw.Log($"no Files/{relative} in resources.pri and no {path}"); return unchecked((int)0x80070002); }
+            Ccw.Log($"XBF from {path}");
+            xbf = File.ReadAllBytes(path);
+        }
 
         string xaml;
-        using (var stream = File.OpenRead(path))
+        using (var stream = new MemoryStream(xbf))
             xaml = XbfKit.XbfDecompiler.Decompile(stream, XbfKit.XbfDialect.WUX, new XbfKit.XbfDecompilationOptions { IncludeConnectionIds = true });
         var doc = XDocument.Parse(xaml);
         var top = doc.Root!;
@@ -83,6 +93,47 @@ public static unsafe class XbfLoader
         }
         Ccw.ComRelease(connector);
         return 0;
+    }
+
+    /* the bytes of the resource Files/<relative> in <root>\resources.pri, or null */
+    static byte[]? FromPri(string root, string relative)
+    {
+        var pri = Path.Combine(root, "resources.pri");
+        if (!File.Exists(pri)) return null;
+        var want = "\\Files\\" + relative.Replace('/', '\\');
+        using var stream = File.OpenRead(pri);
+        var file = PriFormat.PriFile.Parse(stream);
+        foreach (var map in file.Sections.OfType<PriFormat.ResourceMapSection>())
+        {
+            foreach (var set in map.CandidateSets.Values)
+            {
+                var item = file.GetResourceMapItemByRef(set.ResourceMapItem);
+                if (!item.FullName.EndsWith(want, StringComparison.OrdinalIgnoreCase)) continue;
+                foreach (var candidate in set.Candidates)
+                {
+                    var span = candidate.Data ?? (candidate.DataItem is { } r ? file.GetDataItemByRef(r) : null);
+                    if (span is not { } s) continue;
+                    var bytes = new byte[s.Length];
+                    stream.Position = s.Offset;
+                    stream.ReadExactly(bytes);
+                    switch (candidate.Type)
+                    {
+                    case PriFormat.ResourceValueType.EmbeddedData:
+                        Ccw.Log($"XBF {item.FullName}: {bytes.Length} bytes embedded in resources.pri");
+                        return bytes;
+                    case PriFormat.ResourceValueType.Path:
+                    case PriFormat.ResourceValueType.AsciiPath:
+                    case PriFormat.ResourceValueType.Utf8Path:
+                        var text = candidate.Type == PriFormat.ResourceValueType.Path
+                            ? System.Text.Encoding.Unicode.GetString(bytes) : System.Text.Encoding.UTF8.GetString(bytes);
+                        var path = Path.Combine(root, text.TrimEnd('\0'));
+                        Ccw.Log($"XBF {item.FullName}: file {path}");
+                        return File.Exists(path) ? File.ReadAllBytes(path) : null;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     static string UriText(IntPtr uri)

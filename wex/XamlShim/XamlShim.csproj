@@ -24,5 +24,6 @@ self-contained; the native proxy (xamlshim.dll) starts it with hostfxr and calls
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="XbfKit" Version="0.4.0" />
+    <ProjectReference Include="..\PriFormat\PriFormat.csproj" />
   </ItemGroup>
 </Project>

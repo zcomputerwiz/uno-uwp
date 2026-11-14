@@ -3,4 +3,9 @@ SPDX-License-Identifier: Apache-2.0
 Copyright 2026 WineExplorer contributors
 Stops MSBuild here: the wex projects build against the released Uno.Sdk, not with the repository's own build settings.
 -->
-<Project />
+<Project>
+  <!-- PriFormat is third-party code copied unchanged; the repository's .globalconfig would make this rule an error -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'PriFormat'">
+    <NoWarn>$(NoWarn);CA1826</NoWarn>
+  </PropertyGroup>
+</Project>

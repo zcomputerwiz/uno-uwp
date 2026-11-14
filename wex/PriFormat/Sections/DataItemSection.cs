@@ -1,0 +1,60 @@
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
+
+namespace PriFormat;
+
+public class DataItemSection : Section
+{
+    public IReadOnlyList<ByteSpan> DataItems { get; private set; }
+
+    internal const string Identifier = "[mrm_dataitem] \0";
+
+#pragma warning disable CS8618
+    internal DataItemSection(PriFile priFile) : base(Identifier, priFile)
+#pragma warning restore CS8618
+    {
+    }
+
+    protected override bool ParseSectionContent(BinaryReader binaryReader, long sectionContentPosition)
+    {
+        binaryReader.ExpectUInt32(0);
+        ushort numStrings = binaryReader.ReadUInt16();
+        ushort numBlobs = binaryReader.ReadUInt16();
+        uint totalDataLength = binaryReader.ReadUInt32();
+
+        List<ByteSpan> dataItems = new(numStrings + numBlobs);
+
+        long dataStartOffset = binaryReader.BaseStream.Position +
+            numStrings * 2 * sizeof(ushort) + numBlobs * 2 * sizeof(uint);
+
+        if (Math.Align(dataStartOffset + totalDataLength, 8) != binaryReader.BaseStream.Length)
+            throw new InvalidDataException();
+
+        for (int i = 0; i < numStrings; i++)
+        {
+            ushort stringOffset = binaryReader.ReadUInt16();
+            ushort stringLength = binaryReader.ReadUInt16();
+            dataItems.Add(new ByteSpan(sectionContentPosition + dataStartOffset + stringOffset, stringLength));
+        }
+
+        for (int i = 0; i < numBlobs; i++)
+        {
+            uint blobOffset = binaryReader.ReadUInt32();
+            uint blobLength = binaryReader.ReadUInt32();
+            dataItems.Add(new ByteSpan(sectionContentPosition + dataStartOffset + blobOffset, blobLength));
+        }
+
+        DataItems = dataItems;
+
+        return true;
+    }
+}
+
+public record struct DataItemRef(SectionRef<DataItemSection> DataItemSection, int ItemIndex)
+{
+    public override string ToString()
+    {
+        return $"Data item {ItemIndex} in section {DataItemSection.SectionIndex}";
+    }
+}

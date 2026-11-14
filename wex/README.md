@@ -27,7 +27,8 @@ Build (Windows, .NET 10 SDK, Windows SDK 10.0.26100):
 For now the projects build against the released `Uno.Sdk` (`XamlShim/global.json`); changes to Uno itself, when
 needed, go to `../src` and the projects then build against it.
 
-Third-party: XbfKit 0.4.0 (MIT, github.com/0x5bfa/XbfKit), referenced as a NuGet package.
+Third-party: XbfKit 0.4.0 (MIT, github.com/0x5bfa/XbfKit), referenced as a NuGet package; PriFormat (Apache-2.0,
+from github.com/chausner/PriTools, `PriFormat/README.md`), copied unchanged.
 
 Status (2026-11-14): an unmodified compiled C++/CX XAML test application (WineExplorer `tests/uwp/xaml/cx-probe`)
 runs on Wine x64 through this component: start, navigation to its compiled page, layout, `Loaded`, `Click` wiring,
