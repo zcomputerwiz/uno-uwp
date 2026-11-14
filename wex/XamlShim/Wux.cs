@@ -99,6 +99,41 @@ public unsafe partial class UI_Xaml_Application
 {
     public static UI_Xaml_Application? Current;
 
+    /* Application.Suspending and Resuming: the application's handlers, raised from CoreApplication's events with
+     * their sender and arguments as received (on Windows the sender is not the Application either) */
+    static readonly List<IntPtr> suspending = new(), resuming = new();
+
+    int IUI_Xaml_IApplication_Abi.add_Suspending(IntPtr handler, long* token)
+    {
+        Ccw.ComAddRef(handler);
+        lock (suspending) suspending.Add(handler);
+        *token = Shim.Token();
+        return 0;
+    }
+
+    int IUI_Xaml_IApplication_Abi.add_Resuming(IntPtr handler, long* token)
+    {
+        Ccw.ComAddRef(handler);
+        lock (resuming) resuming.Add(handler);
+        *token = Shim.Token();
+        return 0;
+    }
+
+    public static void RaiseSuspending(IntPtr sender, IntPtr args) => Raise(suspending, sender, args, "Suspending");
+    public static void RaiseResuming(IntPtr sender, IntPtr args) => Raise(resuming, sender, args, "Resuming");
+
+    static void Raise(List<IntPtr> handlers, IntPtr sender, IntPtr args, string name)
+    {
+        IntPtr[] list;
+        lock (handlers) list = handlers.ToArray();
+        Ccw.Log($"{name} to {list.Length} handlers");
+        foreach (var h in list)
+        {
+            int hr = Shim.Invoke(h, sender, args);
+            if (hr < 0) Ccw.Log($"{name} handler returned {hr:x8}");
+        }
+    }
+
     int IUI_Xaml_IApplication_Abi.Exit()
     {
         Ccw.Log("Application.Exit");
@@ -159,6 +194,21 @@ public unsafe partial class UI_Xaml_Application_Factory
         HString.Delete(name);
         if (hr >= 0)
         {
+            /* CoreApplication.Suspending and Resuming (EventHandler<SuspendingEventArgs>, EventHandler<Object>) to
+             * Application.Suspending and Resuming */
+            const string eventHandler = "pinterface({9de1c535-6ae1-11e0-84e1-18a905bcc53f};";
+            var suspendIid = PInterface.Iid(eventHandler + "rc(Windows.ApplicationModel.SuspendingEventArgs;" +
+                                            PInterface.Sig(Iids.ApplicationModel_ISuspendingEventArgs) + "))");
+            var resumeIid = PInterface.Iid(eventHandler + "cinterface(IInspectable))");
+            var s = Ccw.Get(new NativeDelegate(suspendIid, UI_Xaml_Application.RaiseSuspending), suspendIid);
+            var r = Ccw.Get(new NativeDelegate(resumeIid, UI_Xaml_Application.RaiseResuming), resumeIid);
+            long token;
+            int hs = ApplicationModel_Core_ICoreApplication_Call.add_Suspending(core, s, &token);
+            int hres = ApplicationModel_Core_ICoreApplication_Call.add_Resuming(core, r, &token);
+            Ccw.Log($"CoreApplication.Suspending {suspendIid} {hs:x8}, Resuming {resumeIid} {hres:x8}");
+            Ccw.ComRelease(s);
+            Ccw.ComRelease(r);
+
             var source = Ccw.GetDefault(new FrameworkViewSource(RunHost));
             hr = ApplicationModel_Core_ICoreApplication_Call.Run(core, source);   /* ends the process when the view ends */
             Ccw.Log($"CoreApplication.Run returned {hr:x8}");
@@ -178,6 +228,7 @@ public unsafe partial class UI_Xaml_Application_Factory
      * launch arguments of the CoreApplication view (or a stand-in without one) */
     static void Launch(IntPtr callback)
     {
+        CoreWindowHost.StartDispatcherPump();
         int hr = UI_Xaml_ApplicationInitializationCallback_Call.Invoke(callback, IntPtr.Zero);
         Ccw.Log($"initialization callback {hr:x8}");
         var app = UI_Xaml_Application.Current;

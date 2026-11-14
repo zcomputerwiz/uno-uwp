@@ -218,6 +218,31 @@ public static unsafe class CoreWindowHost
         return true;
     }
 
+    /* The CoreWindow raises its events (visibility, hence suspend and resume; activation; size) from its dispatcher's
+     * ProcessEvents, which Windows' XAML uses as its message loop. Uno runs a loop of its own, so the shim lets the
+     * dispatcher deliver what is pending every 50 ms, on the view's thread. */
+    public static void StartDispatcherPump()
+    {
+        if (FrameworkView.CoreWindow == IntPtr.Zero) return;
+        IntPtr found;
+        if (UI_Core_ICoreWindow_Call.get_Dispatcher(FrameworkView.CoreWindow, &found) < 0) found = IntPtr.Zero;
+        var dispatcher = found;
+        if (dispatcher == IntPtr.Zero)
+        {
+            Ccw.Log("the CoreWindow has no dispatcher");
+            return;
+        }
+        var pump = new Microsoft.UI.Xaml.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+        pump.Tick += (s, e) =>
+        {
+            const int ProcessAllIfPresent = 3;
+            int hr = UI_Core_ICoreDispatcher_Call.ProcessEvents(dispatcher, ProcessAllIfPresent);
+            if (hr < 0) { Ccw.Log($"CoreDispatcher.ProcessEvents {hr:x8}: pump stopped"); pump.Stop(); }
+        };
+        pump.Start();
+        Ccw.Log("CoreDispatcher pump started");
+    }
+
     /* the CoreWindow's client size, or null without a CoreWindow */
     public static (int Width, int Height)? ClientSize()
     {

@@ -44,3 +44,7 @@ Windows.ApplicationModel.Core.ICoreApplicationView
 Windows.UI.Core.ICoreWindow
 --interface
 Windows.ApplicationModel.Activation.IActivatedEventArgs
+--interface
+Windows.ApplicationModel.ISuspendingEventArgs
+--interface
+Windows.UI.Core.ICoreDispatcher
