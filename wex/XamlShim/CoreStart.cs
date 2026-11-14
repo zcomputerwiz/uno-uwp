@@ -218,10 +218,17 @@ public static unsafe class CoreWindowHost
         return true;
     }
 
+    [DllImport("user32.dll")] static extern void PostQuitMessage(int code);
+
+    static bool coreLoop;
+
     /* The CoreWindow raises its events (visibility, hence suspend and resume; activation; size) from its dispatcher's
-     * ProcessEvents, which Windows' XAML uses as its message loop. Uno runs a loop of its own, so the shim lets the
-     * dispatcher deliver what is pending every 50 ms, on the view's thread. */
-    public static void StartDispatcherPump()
+     * ProcessEvents, which Windows' XAML uses as its message loop. Uno's host runs a GetMessage loop of its own; its
+     * dispatcher only posts messages to a window of its own, which any loop serves. So once the application has
+     * launched, a Uno action enters CoreDispatcher.ProcessEvents(ProcessUntilQuit): from then on Wine's loop dispatches
+     * every message of the thread (Uno's included) and wakes for the CoreWindow's events. Application.Exit posts WM_QUIT,
+     * which ends that loop; Uno's loop then finds its windows closed and returns. */
+    public static void EnterCoreDispatcherLoop()
     {
         if (FrameworkView.CoreWindow == IntPtr.Zero) return;
         IntPtr found;
@@ -232,15 +239,21 @@ public static unsafe class CoreWindowHost
             Ccw.Log("the CoreWindow has no dispatcher");
             return;
         }
-        var pump = new Microsoft.UI.Xaml.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
-        pump.Tick += (s, e) =>
+        Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().TryEnqueue(() =>
         {
-            const int ProcessAllIfPresent = 3;
-            int hr = UI_Core_ICoreDispatcher_Call.ProcessEvents(dispatcher, ProcessAllIfPresent);
-            if (hr < 0) { Ccw.Log($"CoreDispatcher.ProcessEvents {hr:x8}: pump stopped"); pump.Stop(); }
-        };
-        pump.Start();
-        Ccw.Log("CoreDispatcher pump started");
+            const int ProcessUntilQuit = 2;
+            coreLoop = true;
+            Ccw.Log("CoreDispatcher.ProcessEvents(ProcessUntilQuit) runs the message loop");
+            int hr = UI_Core_ICoreDispatcher_Call.ProcessEvents(dispatcher, ProcessUntilQuit);
+            coreLoop = false;
+            Ccw.Log($"CoreDispatcher loop returned {hr:x8}");
+        });
+    }
+
+    /* Application.Exit: end the CoreDispatcher loop as well */
+    public static void QuitCoreDispatcherLoop()
+    {
+        if (coreLoop) PostQuitMessage(0);
     }
 
     /* the CoreWindow's client size, or null without a CoreWindow */

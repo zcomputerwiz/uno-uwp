@@ -138,6 +138,7 @@ public unsafe partial class UI_Xaml_Application
     {
         Ccw.Log("Application.Exit");
         Mux.Application.Current.Exit();
+        CoreWindowHost.QuitCoreDispatcherLoop();
         return 0;
     }
 }
@@ -228,7 +229,7 @@ public unsafe partial class UI_Xaml_Application_Factory
      * launch arguments of the CoreApplication view (or a stand-in without one) */
     static void Launch(IntPtr callback)
     {
-        CoreWindowHost.StartDispatcherPump();
+        CoreWindowHost.EnterCoreDispatcherLoop();   /* queued: runs once this launch has returned */
         int hr = UI_Xaml_ApplicationInitializationCallback_Call.Invoke(callback, IntPtr.Zero);
         Ccw.Log($"initialization callback {hr:x8}");
         var app = UI_Xaml_Application.Current;
