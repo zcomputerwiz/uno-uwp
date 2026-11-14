@@ -1,0 +1,6 @@
+<!--
+SPDX-License-Identifier: Apache-2.0
+Copyright 2026 WineExplorer contributors
+Stops MSBuild here: the wex projects build against the released Uno.Sdk, not with the repository's own build settings.
+-->
+<Project />

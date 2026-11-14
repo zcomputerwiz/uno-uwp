@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 WineExplorer contributors
+# wex builds with the .NET defaults, not with the repository's analyzer settings
+root = true
+
+[*]
+indent_style = space
+indent_size = 4
