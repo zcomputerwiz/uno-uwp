@@ -3,6 +3,7 @@
 //
 // The Windows.UI.Xaml members the XAML probe (tests/uwp/xaml/cx-probe) uses, implemented over Uno. Every other member
 // of the generated interfaces logs "not implemented" and returns E_NOTIMPL.
+using System.Runtime.InteropServices;
 using global::Uno.UI.Hosting;
 using Mux = Microsoft.UI.Xaml;
 using UnoControls = Microsoft.UI.Xaml.Controls;
@@ -122,12 +123,17 @@ public unsafe partial class UI_Xaml_Application_Factory
         return 0;
     }
 
+    [DllImport("combase.dll")] static extern int RoGetActivationFactory(IntPtr classId, Guid* iid, IntPtr* factory);
+
+    /* as on Windows: CoreApplication.Run with the shim's view source; the view's Run runs the Uno host on the view's
+     * thread. Without a CoreApplication (Run refused: not packaged, wrong apartment), the host runs on a thread of its
+     * own as before. */
     int IUI_Xaml_IApplicationStatics_Abi.Start(IntPtr callback)
     {
         Ccw.Log("Application.Start");
         Ccw.ComAddRef(callback);
         int status = 0;
-        var thread = new Thread(() =>
+        void RunHost()
         {
             try
             {
@@ -144,23 +150,43 @@ public unsafe partial class UI_Xaml_Application_Factory
                 Ccw.Log($"Uno host failed: {e}");
                 status = unchecked((int)0x80004005);
             }
-        });
+        }
+
+        var name = HString.Create("Windows.ApplicationModel.Core.CoreApplication");
+        var iid = Iids.ApplicationModel_Core_ICoreApplication;
+        IntPtr core;
+        int hr = RoGetActivationFactory(name, &iid, &core);
+        HString.Delete(name);
+        if (hr >= 0)
+        {
+            var source = Ccw.GetDefault(new FrameworkViewSource(RunHost));
+            hr = ApplicationModel_Core_ICoreApplication_Call.Run(core, source);   /* ends the process when the view ends */
+            Ccw.Log($"CoreApplication.Run returned {hr:x8}");
+            Ccw.ComRelease(source);
+            Ccw.ComRelease(core);
+            if (hr >= 0) return status;
+        }
+        Ccw.Log($"no CoreApplication view ({hr:x8}): the Uno host runs on a thread of its own");
+        var thread = new Thread(RunHost);
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         thread.Join();
         return status;
     }
 
-    /* on the UI thread, once Uno has launched: the application's callback creates App, then OnLaunched */
+    /* on the UI thread, once Uno has launched: the application's callback creates App, then OnLaunched with the
+     * launch arguments of the CoreApplication view (or a stand-in without one) */
     static void Launch(IntPtr callback)
     {
         int hr = UI_Xaml_ApplicationInitializationCallback_Call.Invoke(callback, IntPtr.Zero);
         Ccw.Log($"initialization callback {hr:x8}");
         var app = UI_Xaml_Application.Current;
         if (app == null) { Ccw.Log("no Application was created"); return; }
-        var args = new ApplicationModel_Activation_LaunchActivatedEventArgs();
+        IntPtr a;
+        if (FrameworkView.LaunchArgs == IntPtr.Zero ||
+            Ccw.QueryInterface(FrameworkView.LaunchArgs, Iids.ApplicationModel_Activation_ILaunchActivatedEventArgs, out a) < 0)
+            a = Ccw.GetDefault(new ApplicationModel_Activation_LaunchActivatedEventArgs());
         var overrides = Ccw.Get(app, Iids.UI_Xaml_IApplicationOverrides);
-        var a = Ccw.GetDefault(args);
         hr = UI_Xaml_IApplicationOverrides_Call.OnLaunched(overrides, a);
         Ccw.Log($"OnLaunched {hr:x8}");
         Ccw.ComRelease(a);
@@ -198,8 +224,23 @@ public unsafe partial class UI_Xaml_Window
 
     int IUI_Xaml_IWindow_Abi.Activate()
     {
+        /* the first layout already at the CoreWindow's size, as on Windows: place Uno's window before it is shown */
+        bool placed = FrameworkView.CoreHwnd != IntPtr.Zero && CoreWindowHost.Embed();
         UnoWindow!.Activate();
-        Ccw.Log("Window.Activate");
+        Ccw.Log($"Window.Activate (placed before: {placed})");
+        /* place Uno's window in the CoreWindow as soon as it exists (a few tries: Uno makes it asynchronously) */
+        if (FrameworkView.CoreHwnd != IntPtr.Zero && !placed && !CoreWindowHost.Embed())
+        {
+            int tries = 0;
+            var embed = new Mux.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+            embed.Tick += (s, e) =>
+            {
+                if (CoreWindowHost.Embed() || ++tries == 40) embed.Stop();
+                if (tries == 40) Ccw.Log("Uno's window was not found: it stays a window of its own");
+            };
+            embed.Start();
+        }
+        if (!Ccw.Tracing) return 0;
         var timer = new Mux.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         timer.Tick += (s, e) =>
         {

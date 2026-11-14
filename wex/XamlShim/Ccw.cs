@@ -16,6 +16,8 @@ namespace XamlShim.Abi;
 public abstract class ShimObject
 {
     public virtual string RuntimeClassName => GetType().Name;
+    /* the interfaces of an object that is not a runtime class of the generated table (delegates, view sources) */
+    internal virtual (Guid Iid, IntPtr Vtbl, Func<object, bool> Implements)[]? CustomInterfaces => null;
     internal CcwState? CcwData;
 }
 
@@ -52,6 +54,8 @@ internal sealed unsafe class CcwState
             if (ClassTable.Factory.TryGetValue(f.ClassName, out var t)) list.AddRange(t);
             Table = list.ToArray();
         }
+        else if (managed.CustomInterfaces is { } custom)
+            Table = custom;
         else if (!ClassTable.Interfaces.TryGetValue(managed.RuntimeClassName, out Table!))
             Table = Array.Empty<(Guid, IntPtr, Func<object, bool>)>();
     }

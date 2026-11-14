@@ -32,3 +32,15 @@ Windows.UI.Xaml.ApplicationInitializationCallback
 Windows.UI.Xaml.RoutedEventHandler
 --interface
 Windows.Foundation.IUriRuntimeClass
+--interface
+Windows.ApplicationModel.Core.ICoreApplication
+--interface
+Windows.ApplicationModel.Core.IFrameworkViewSource
+--interface
+Windows.ApplicationModel.Core.IFrameworkView
+--interface
+Windows.ApplicationModel.Core.ICoreApplicationView
+--interface
+Windows.UI.Core.ICoreWindow
+--interface
+Windows.ApplicationModel.Activation.IActivatedEventArgs
