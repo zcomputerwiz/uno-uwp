@@ -420,7 +420,8 @@ sealed class Generator
                              ps[1].Name == "@innerInterface" && ps[2].Name == "result";
             var body = composable
                 ? "=> ShimFactory.ComposeDefault(this, @baseInterface, @innerInterface, result);"
-                : PropertyBody(mname, ps) ?? $"{{ Ccw.NotImplemented(\"{name}.{mname}\"); return unchecked((int)0x80004001); }}";
+                : PropertyBody(mname, ps) ?? EventBody(mname, ps) ??
+                  $"{{ Ccw.NotImplemented(\"{name}.{mname}\"); return unchecked((int)0x80004001); }}";
             s.AppendLine($"    int {mname}({string.Join(", ", ps.Select(p => p.Decl))}) {body}");
         }
         s.AppendLine("}");
@@ -479,6 +480,7 @@ sealed class Generator
                 "prim" => $"{{ *result = ({t.Cs})System.Convert.ChangeType(Reflect.Get(this, \"{prop}\")!, typeof({t.Cs}), System.Globalization.CultureInfo.InvariantCulture); return 0; }}",
                 "enum" => $"{{ *result = unchecked(({t.Cs})Reflect.GetInteger(this, \"{prop}\")); return 0; }}",
                 "object" => $"{{ *result = Boxing.Box(Reflect.Get(this, \"{prop}\")); return 0; }}",
+                "struct" => $"{{ *result = Reflect.GetStruct<{t.Cs}>(this, \"{prop}\"); return 0; }}",
                 _ => null,
             };
         if (mname.StartsWith("put_") && ps[0].Name == "@value")
@@ -489,8 +491,19 @@ sealed class Generator
                 "prim" => $"{{ Reflect.Set(this, \"{prop}\", @value); return 0; }}",
                 "enum" => $"{{ Reflect.Set(this, \"{prop}\", (long)@value); return 0; }}",
                 "object" => $"{{ Reflect.Set(this, \"{prop}\", Boxing.Unbox(@value)); return 0; }}",
+                "struct" => $"{{ Reflect.SetStruct(this, \"{prop}\", @value); return 0; }}",
                 _ => null,
             };
+        return null;
+    }
+
+    /* a default body for an event accessor: the Uno object's event of the same name (Events, XamlShim) */
+    static string? EventBody(string mname, List<(string Decl, string Name, AbiType? Type)> ps)
+    {
+        if (mname.StartsWith("add_") && ps.Count == 2 && ps[0].Name == "@handler" && ps[1].Name == "result")
+            return $"=> Events.Add(this, \"{mname[4..]}\", @handler, result);";
+        if (mname.StartsWith("remove_") && ps.Count == 1 && ps[0].Name == "@token")
+            return $"=> Events.Remove(this, \"{mname[7..]}\", @token);";
         return null;
     }
 

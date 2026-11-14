@@ -16,6 +16,8 @@ namespace XamlShim.Abi;
 public abstract class ShimObject
 {
     public virtual string RuntimeClassName => GetType().Name;
+    /* the Uno object behind it (elements, event arguments, ...); null for shims that are not over one */
+    public object? UnoObject;
     /* the interfaces of an object that is not a runtime class of the generated table (delegates, view sources) */
     internal virtual (Guid Iid, IntPtr Vtbl, Func<object, bool> Implements)[]? CustomInterfaces => null;
     internal CcwState? CcwData;
@@ -105,17 +107,20 @@ internal sealed unsafe class CcwState
         return (IntPtr)p;
     });
 
-    /* the identity: the block of the first (default) interface */
+    /* the identity (IUnknown): the block of the first (default) interface */
     public IntPtr Identity => Table.Length > 0 ? Block(Table[0].Iid, Table[0].Vtbl) : Block(Ccw.IID_IInspectable, Ccw.InspectableVtbl);
+
+    /* IInspectable has a block of its own, as on Windows, where the IInspectable of an element (an event's sender, an
+     * object property) is not the pointer of its default interface: C++/CX compares such pointers directly */
+    public IntPtr Inspectable => Block(Ccw.IID_IInspectable, Ccw.InspectableVtbl);
 
     public int LocalQuery(Guid iid, IntPtr* result)
     {
         *result = IntPtr.Zero;
-        if (iid == Ccw.IID_IUnknown || iid == Ccw.IID_IInspectable ||
-            iid == Ccw.IID_IAgileObject || iid == Ccw.IID_IShimObject)
-        {
+        if (iid == Ccw.IID_IInspectable)
+            *result = Inspectable;
+        else if (iid == Ccw.IID_IUnknown || iid == Ccw.IID_IAgileObject || iid == Ccw.IID_IShimObject)
             *result = iid == Ccw.IID_IUnknown && Inner != IntPtr.Zero ? Inner : Identity;
-        }
         else
         {
             foreach (var (i, vtbl, _) in Table)
@@ -261,7 +266,7 @@ public static unsafe class Ccw
         var s = StateOf(o);
         if (s.Outer != IntPtr.Zero) { ComAddRef(s.Outer); return s.Outer; }
         Interlocked.Increment(ref s.Refs);
-        return s.Identity;
+        return s.Inspectable;
     }
 
     /* an AddRef'd pointer to the default interface of o: what the ABI passes for a parameter of a class type */

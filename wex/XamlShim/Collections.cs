@@ -33,10 +33,12 @@ public static unsafe class Boxing
     public static IntPtr Box(object? value)
     {
         IntPtr result = IntPtr.Zero;
+        /* framework objects (elements, event arguments, ...) through their shims */
+        if (value != null && value is not string && !value.GetType().IsPrimitive && Shim.TryFor(value) is { } shim)
+            return Ccw.Get(shim);
         switch (value)
         {
         case null: return IntPtr.Zero;
-        case Mux.DependencyObject d: return Ccw.Get(Shim.For(d));
         case string s:
         {
             var h = HString.Create(s);

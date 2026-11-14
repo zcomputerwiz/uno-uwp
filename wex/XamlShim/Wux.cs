@@ -16,45 +16,42 @@ static class Shim
     public static long Token() => Interlocked.Increment(ref tokens);
     public static readonly List<IntPtr> Kept = new();      /* native objects the framework holds (never released here) */
 
-    /* the shim for a Uno object, made once; the class follows the Uno type or its nearest known base */
-    public static ShimObject For(object uno) => Ccw.Wrap(uno, () =>
+    /* the shim for a Uno object, made once: the generated class of the same name (Microsoft.UI.Xaml.X is
+     * Windows.UI.Xaml.X, class UI_Xaml_X), or that of its nearest base that has one; null when there is none */
+    public static ShimObject? TryFor(object uno)
     {
-        for (var t = uno.GetType(); t != null; t = t.BaseType)
+        if (Ccw.Wrapped(uno) is { } existing) return existing;
+        var type = ShimType(uno.GetType());
+        if (type == null) return null;
+        return Ccw.Wrap(uno, () =>
         {
-            if (Classes.TryGetValue(t.FullName ?? "", out var make))
-            {
-                var s = make();
-                ((UI_Xaml_DependencyObject)s).UnoObject = uno;
-                return s;
-            }
+            var s = (ShimObject)Activator.CreateInstance(type)!;
+            s.UnoObject = uno;
+            return s;
+        });
+    }
+
+    public static ShimObject For(object uno) =>
+        TryFor(uno) ?? throw new NotSupportedException($"no shim class for {uno.GetType().FullName}");
+
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, Type?> shimTypes = new();
+
+    static Type? ShimType(Type unoType) => shimTypes.GetOrAdd(unoType, t =>
+    {
+        const string prefix = "Microsoft.UI.Xaml.";
+        for (; t != null; t = t.BaseType)
+        {
+            var name = t.FullName ?? "";
+            if (!name.StartsWith(prefix, StringComparison.Ordinal) || t.IsGenericType) continue;
+            var shim = typeof(Shim).Assembly.GetType("XamlShim.Abi.UI_Xaml_" + name[prefix.Length..].Replace('.', '_'));
+            if (shim != null && typeof(ShimObject).IsAssignableFrom(shim) && !shim.IsAbstract &&
+                !typeof(ShimFactory).IsAssignableFrom(shim))
+                return shim;
         }
-        throw new NotSupportedException($"no shim class for {uno.GetType().FullName}");
+        return null;
     });
 
-    static readonly Dictionary<string, Func<ShimObject>> Classes = new()
-    {
-        ["Microsoft.UI.Xaml.Controls.StackPanel"] = () => new UI_Xaml_Controls_StackPanel(),
-        ["Microsoft.UI.Xaml.Controls.Grid"] = () => new UI_Xaml_Controls_Grid(),
-        ["Microsoft.UI.Xaml.Controls.Border"] = () => new UI_Xaml_Controls_Border(),
-        ["Microsoft.UI.Xaml.Controls.TextBox"] = () => new UI_Xaml_Controls_TextBox(),
-        ["Microsoft.UI.Xaml.Controls.CheckBox"] = () => new UI_Xaml_Controls_CheckBox(),
-        ["Microsoft.UI.Xaml.Controls.Primitives.ToggleButton"] = () => new UI_Xaml_Controls_Primitives_ToggleButton(),
-        ["Microsoft.UI.Xaml.Controls.Image"] = () => new UI_Xaml_Controls_Image(),
-        ["Microsoft.UI.Xaml.Controls.ListView"] = () => new UI_Xaml_Controls_ListView(),
-        ["Microsoft.UI.Xaml.Controls.ItemsControl"] = () => new UI_Xaml_Controls_ItemsControl(),
-        ["Microsoft.UI.Xaml.Controls.ScrollViewer"] = () => new UI_Xaml_Controls_ScrollViewer(),
-        ["Microsoft.UI.Xaml.Controls.TextBlock"] = () => new UI_Xaml_Controls_TextBlock(),
-        ["Microsoft.UI.Xaml.Controls.Button"] = () => new UI_Xaml_Controls_Button(),
-        ["Microsoft.UI.Xaml.Controls.Page"] = () => new UI_Xaml_Controls_Page(),
-        ["Microsoft.UI.Xaml.Controls.Frame"] = () => new UI_Xaml_Controls_Frame(),
-        ["Microsoft.UI.Xaml.Controls.Panel"] = () => new UI_Xaml_Controls_Panel(),
-        ["Microsoft.UI.Xaml.Controls.ContentControl"] = () => new UI_Xaml_Controls_ContentControl(),
-        ["Microsoft.UI.Xaml.Controls.Control"] = () => new UI_Xaml_Controls_Control(),
-        ["Microsoft.UI.Xaml.FrameworkElement"] = () => new UI_Xaml_FrameworkElement(),
-        ["Microsoft.UI.Xaml.UIElement"] = () => new UI_Xaml_UIElement(),
-    };
-
-    public static object? UnoOf(IntPtr p) => (Ccw.Unwrap(p) as UI_Xaml_DependencyObject)?.UnoObject;
+    public static object? UnoOf(IntPtr p) => Ccw.Unwrap(p)?.UnoObject;
 
     /* invoke a delegate (IUnknown-based: Invoke is slot 3) with two IInspectable arguments */
     public static unsafe int Invoke(IntPtr handler, IntPtr sender, IntPtr args) =>
@@ -84,7 +81,7 @@ static class Shim
     public static unsafe int Compose(ShimObject shim, IntPtr outer, IntPtr* inner, IntPtr* result)
     {
         /* one shim per Uno object: register the factory-made shim so Shim.For finds it */
-        if (shim is UI_Xaml_DependencyObject d && d.UnoObject != null) Ccw.Wrap(d.UnoObject, () => shim);
+        if (shim.UnoObject != null) Ccw.Wrap(shim.UnoObject, () => shim);
         var (i, instance) = Ccw.Compose(shim, outer);
         if (inner != null) *inner = i;
         Ccw.Trace($"compose {shim.RuntimeClassName}: {Ccw.Describe(shim)}");
@@ -95,11 +92,6 @@ static class Shim
         if (outer == IntPtr.Zero && instance != IntPtr.Zero) Ccw.ComRelease(instance);
         return 0;
     }
-}
-
-public partial class UI_Xaml_DependencyObject
-{
-    public object? UnoObject;
 }
 
 // ---- Application ----
@@ -362,15 +354,6 @@ public unsafe partial class UI_Xaml_FrameworkElement
 
     int IUI_Xaml_IFrameworkElement_Abi.get_ActualWidth(double* result) { *result = Fe.ActualWidth; return 0; }
     int IUI_Xaml_IFrameworkElement_Abi.get_ActualHeight(double* result) { *result = Fe.ActualHeight; return 0; }
-
-    int IUI_Xaml_IFrameworkElement_Abi.add_Loaded(IntPtr handler, long* token)
-    {
-        Ccw.ComAddRef(handler);
-        Ccw.Log($"add_Loaded on {RuntimeClassName}");
-        Fe.Loaded += (s, e) => { Ccw.Log($"Loaded {RuntimeClassName}"); Shim.Raise(handler, this, new UI_Xaml_RoutedEventArgs()); };
-        *token = Shim.Token();
-        return 0;
-    }
 }
 
 public unsafe partial class UI_Xaml_Media_GeneralTransform
@@ -402,16 +385,6 @@ public unsafe partial class UI_Xaml_Controls_UserControl
     }
 }
 
-public unsafe partial class UI_Xaml_Controls_Primitives_ButtonBase
-{
-    int IUI_Xaml_Controls_Primitives_IButtonBase_Abi.add_Click(IntPtr handler, long* token)
-    {
-        Ccw.ComAddRef(handler);
-        ((UnoControls.Primitives.ButtonBase)UnoObject!).Click += (s, e) => Shim.Raise(handler, this, new UI_Xaml_RoutedEventArgs());
-        *token = Shim.Token();
-        return 0;
-    }
-}
 
 // ---- Frame and Page ----
 
