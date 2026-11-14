@@ -8,6 +8,13 @@ public partial class UnoHostApp : Microsoft.UI.Xaml.Application
     public static Microsoft.UI.Xaml.Window? MainWindow;
     public static Action? Launched;
 
+    /* UWP's default text font is Segoe UI, which only Windows has; Selawik (Microsoft, OFL-1.1, Assets/Fonts) is its
+     * metric-compatible open fallback */
+    static UnoHostApp()
+    {
+        global::Uno.UI.FeatureConfiguration.Font.DefaultTextFontFamily = "ms-appx:///Assets/Fonts/selawk.ttf#Selawik";
+    }
+
     public UnoHostApp()
     {
         this.InitializeComponent();

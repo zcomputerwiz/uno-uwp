@@ -28,7 +28,12 @@ For now the projects build against the released `Uno.Sdk` (`XamlShim/global.json
 needed, go to `../src` and the projects then build against it.
 
 Third-party: XbfKit 0.4.0 (MIT, github.com/0x5bfa/XbfKit), referenced as a NuGet package; PriFormat (Apache-2.0,
-from github.com/chausner/PriTools, `PriFormat/README.md`), copied unchanged.
+from github.com/chausner/PriTools, `PriFormat/README.md`), copied unchanged; `XamlShim/Themes/UwpGeneric.xaml`, the
+UWP system styles from microsoft-ui-xaml's `generic.xaml` (MIT, `Themes/WinUI-LICENSE.txt`; adapted, see its header);
+Selawik 1.01 (OFL-1.1, `XamlShim/Assets/Fonts/Selawik-OFL.txt`), the open metric-compatible stand-in for Segoe UI.
+`release/` builds a release: `make-release-zip.ps1` (after `dotnet publish`), `collect_notices.py` (NOTICE.txt from
+the build's packages plus `release/extra-licenses`), `zipdir.py`, and `adapt_generic.py`, which regenerates
+`UwpGeneric.xaml` from upstream's `generic.xaml`.
 
 Status (2026-11-14): an unmodified compiled C++/CX XAML test application (WineExplorer `tests/uwp/xaml/cx-probe`)
 runs on Wine x64 through this component: start, navigation to its compiled page, layout, `Loaded`, `Click` wiring,

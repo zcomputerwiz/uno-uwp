@@ -26,4 +26,8 @@ self-contained; the native proxy (xamlshim.dll) starts it with hostfxr and calls
     <PackageReference Include="XbfKit" Version="0.4.0" />
     <ProjectReference Include="..\PriFormat\PriFormat.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Selawik (OFL-1.1): UWP's default font, Segoe UI, is Windows-only -->
+    <Content Include="Assets\Fonts\*.ttf;Assets\Fonts\Selawik-OFL.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

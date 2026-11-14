@@ -10,6 +10,8 @@ The Uno application behind every Windows.UI.Xaml application the shim serves.
     <ResourceDictionary>
       <ResourceDictionary.MergedDictionaries>
         <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+        <!-- the UWP system styles (WinUI 3's own generic.xaml, MIT), after Uno's: they take precedence -->
+        <ResourceDictionary Source="ms-appx:///Themes/UwpGeneric.xaml" />
       </ResourceDictionary.MergedDictionaries>
     </ResourceDictionary>
   </Application.Resources>

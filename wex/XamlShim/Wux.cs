@@ -306,6 +306,13 @@ public unsafe partial class UI_Xaml_Window
                 for (int i = 0; i < n; i++) Walk(Mux.Media.VisualTreeHelper.GetChild(o, i), depth + 1);
             }
             Ccw.Log($"window bounds {UnoWindow.Bounds}");
+            for (var p = UnoWindow.Content != null ? Mux.Media.VisualTreeHelper.GetParent(UnoWindow.Content) : null; p != null;
+                 p = Mux.Media.VisualTreeHelper.GetParent(p))
+                if (p is Mux.FrameworkElement a)
+                    Ccw.Log($"ancestor {a.GetType().FullName} {a.ActualWidth:0}x{a.ActualHeight:0} h {a.HorizontalAlignment} " +
+                            $"style {(a.Style != null ? "set" : "none")} " +
+                            (a is Microsoft.UI.Xaml.Controls.ContentControl cc ? $"hca {cc.HorizontalContentAlignment}" :
+                             a is Microsoft.UI.Xaml.Controls.ContentPresenter cp ? $"hca {cp.HorizontalContentAlignment}" : ""));
             if (UnoWindow.Content != null) Walk(UnoWindow.Content, 0);
         };
         timer.Start();
