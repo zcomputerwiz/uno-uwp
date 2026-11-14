@@ -73,6 +73,8 @@ static class Shim
     /* composable activation shared by the factories: new shim around uno, inner of outer when there is one */
     public static unsafe int Compose(ShimObject shim, IntPtr outer, IntPtr* inner, IntPtr* result)
     {
+        /* one shim per Uno object: register the factory-made shim so Shim.For finds it */
+        if (shim is UI_Xaml_DependencyObject d && d.UnoObject != null) Ccw.Wrap(d.UnoObject, () => shim);
         var (i, instance) = Ccw.Compose(shim, outer);
         if (inner != null) *inner = i;
         Ccw.Trace($"compose {shim.RuntimeClassName}: {Ccw.Describe(shim)}");
@@ -328,8 +330,32 @@ public unsafe partial class UI_Xaml_Controls_Frame
         Shim.Kept.Add(instance);
         var page = Shim.UnoOf(instance);
         Ccw.Log($"Navigate {name}: {page?.GetType().Name ?? "not a shim object"}");
-        ((UnoControls.ContentControl)UnoObject!).Content = page;
+        var frame = (UnoControls.ContentControl)UnoObject!;
+        if (frame.Content != null) backStackDepth++;        /* the back stack keeps the page type; navigation back is not done */
+        frame.Content = page;
         *result = 1;
+        return 0;
+    }
+
+    int backStackDepth;
+
+    int IUI_Xaml_Controls_IFrame_Abi.get_BackStackDepth(int* result) { *result = backStackDepth; return 0; }
+}
+
+public unsafe partial class UI_Xaml_Controls_Page
+{
+    /* the Frame showing this page: the nearest Uno Frame among its ancestors */
+    int IUI_Xaml_Controls_IPage_Abi.get_Frame(IntPtr* result)
+    {
+        *result = IntPtr.Zero;
+        for (var o = Mux.Media.VisualTreeHelper.GetParent((Mux.DependencyObject)UnoObject!); o != null; o = Mux.Media.VisualTreeHelper.GetParent(o))
+        {
+            if (o is UnoControls.Frame f)
+            {
+                *result = Ccw.GetDefault(Shim.For(f));
+                return 0;
+            }
+        }
         return 0;
     }
 }
