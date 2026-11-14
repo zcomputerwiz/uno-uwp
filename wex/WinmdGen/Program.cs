@@ -235,13 +235,14 @@ sealed class Generator
 
     // ---- signatures ----
 
-    public sealed record AbiType(string Cs, string? Struct = null, bool IsArray = false, bool ByRef = false);
+    /* Kind: void, bool, prim, string, object, enum, struct, other (what a default property body can convert) */
+    public sealed record AbiType(string Cs, string? Struct = null, bool IsArray = false, bool ByRef = false, string Kind = "prim");
 
     sealed class SigProvider : ISignatureTypeProvider<AbiType, object?>
     {
         readonly Generator g;
         public SigProvider(Generator g) { this.g = g; }
-        public AbiType GetPrimitiveType(PrimitiveTypeCode c) => new(c switch
+        public AbiType GetPrimitiveType(PrimitiveTypeCode c) => new AbiType(c switch
         {
             PrimitiveTypeCode.Void => "void",
             PrimitiveTypeCode.Boolean => "byte",
@@ -257,7 +258,9 @@ sealed class Generator
             PrimitiveTypeCode.Single => "float",
             PrimitiveTypeCode.Double => "double",
             _ => "IntPtr",                       // String (HSTRING), Object (IInspectable*)
-        });
+        }) with { Kind = c switch { PrimitiveTypeCode.Void => "void", PrimitiveTypeCode.Boolean => "bool",
+                                    PrimitiveTypeCode.String => "string", PrimitiveTypeCode.Object => "object",
+                                    PrimitiveTypeCode.Char => "other", _ => "prim" } };
         public AbiType GetTypeFromDefinition(MetadataReader r, TypeDefinitionHandle h, byte kind) => Named(g.FullName(h), kind);
         public AbiType GetTypeFromReference(MetadataReader r, TypeReferenceHandle h, byte kind) => Named(g.FullName(h), kind);
         AbiType Named(string name, byte kind)
@@ -265,32 +268,32 @@ sealed class Generator
             /* the union metadata names some Windows.Foundation types by their .NET projections */
             switch (name)
             {
-            case "System.Guid": return new("Guid");
-            case "System.TimeSpan": return new("long");                       /* Windows.Foundation.TimeSpan */
-            case "System.DateTimeOffset": return new("long");                 /* Windows.Foundation.DateTime */
-            case "System.Runtime.InteropServices.WindowsRuntime.EventRegistrationToken": return new("long");
-            case "System.Exception": return new("int");                       /* Windows.Foundation.HResult */
-            case "System.Type": return new("TypeName");                       /* Windows.UI.Xaml.Interop.TypeName */
+            case "System.Guid": return new("Guid") { Kind = "other" };
+            case "System.TimeSpan": return new("long") { Kind = "other" };                       /* Windows.Foundation.TimeSpan */
+            case "System.DateTimeOffset": return new("long") { Kind = "other" };                 /* Windows.Foundation.DateTime */
+            case "System.Runtime.InteropServices.WindowsRuntime.EventRegistrationToken": return new("long") { Kind = "other" };
+            case "System.Exception": return new("int") { Kind = "other" };                       /* Windows.Foundation.HResult */
+            case "System.Type": return new("TypeName") { Kind = "other" };                       /* Windows.UI.Xaml.Interop.TypeName */
             }
-            if (name.StartsWith("System.Numerics.")) return new(name);        /* Windows.Foundation.Numerics */
-            if (kind != (byte)SignatureTypeKind.ValueType) return new("IntPtr");
-            if (!g.types.TryGetValue(name, out var h)) return new("IntPtr");
+            if (name.StartsWith("System.Numerics.")) return new(name) { Kind = "other" };        /* Windows.Foundation.Numerics */
+            if (kind != (byte)SignatureTypeKind.ValueType) return new("IntPtr") { Kind = "object" };
+            if (!g.types.TryGetValue(name, out var h)) return new("IntPtr") { Kind = "other" };
             var def = g.md.GetTypeDefinition(h);
-            if (def.BaseType.IsNil) return new("IntPtr");
+            if (def.BaseType.IsNil) return new("IntPtr") { Kind = "other" };
             if (g.FullName(def.BaseType) == "System.Enum")
             {
                 foreach (var fh in def.GetFields())
                 {
                     var f = g.md.GetFieldDefinition(fh);
-                    if (g.md.GetString(f.Name) == "value__") return f.DecodeSignature(this, null);
+                    if (g.md.GetString(f.Name) == "value__") return f.DecodeSignature(this, null) with { Kind = "enum" };
                 }
-                return new("int");
+                return new("int") { Kind = "enum" };
             }
-            return new(Ident(name), name);
+            return new(Ident(name), name) { Kind = "struct" };
         }
         public AbiType GetSZArrayType(AbiType e) => new(e.Cs, e.Struct, IsArray: true);
         public AbiType GetByReferenceType(AbiType e) => e with { ByRef = true };
-        public AbiType GetGenericInstantiation(AbiType t, ImmutableArray<AbiType> a) => new("IntPtr");
+        public AbiType GetGenericInstantiation(AbiType t, ImmutableArray<AbiType> a) => new("IntPtr") { Kind = "object" };
         public AbiType GetTypeFromSpecification(MetadataReader r, object? c, TypeSpecificationHandle h, byte k) => new("IntPtr");
         public AbiType GetGenericTypeParameter(object? c, int i) => new("IntPtr");
         public AbiType GetGenericMethodParameter(object? c, int i) => new("IntPtr");
@@ -314,7 +317,7 @@ sealed class Generator
     }
 
     // the ABI parameter list of one method: (C# parameter declarations, argument names)
-    List<(string Decl, string Name)> AbiParams(MethodDefinition m)
+    List<(string Decl, string Name, AbiType? Type)> AbiParams(MethodDefinition m)
     {
         var sig = m.DecodeSignature(new SigProvider(this), null);
         var names = new Dictionary<int, (string Name, bool Out)>();
@@ -323,22 +326,22 @@ sealed class Generator
             var p = md.GetParameter(ph);
             names[p.SequenceNumber] = (md.GetString(p.Name), (p.Attributes & System.Reflection.ParameterAttributes.Out) != 0);
         }
-        var list = new List<(string, string)>();
+        var list = new List<(string, string, AbiType?)>();
         for (int i = 0; i < sig.ParameterTypes.Length; i++)
         {
             var t = sig.ParameterTypes[i];
             var (name, isOut) = names.TryGetValue(i + 1, out var n) ? n : ($"p{i}", false);
             name = "@" + name;
-            if (t.IsArray && t.ByRef) { list.Add(($"uint* {name}Length", name + "Length")); list.Add(($"{t.Cs}** {name}", name)); }
-            else if (t.IsArray) { list.Add(($"uint {name}Length", name + "Length")); list.Add(($"{t.Cs}* {name}", name)); }
-            else if (t.ByRef) list.Add(($"{t.Cs}* {name}", name));
-            else list.Add(($"{t.Cs} {name}", name));
+            if (t.IsArray && t.ByRef) { list.Add(($"uint* {name}Length", name + "Length", null)); list.Add(($"{t.Cs}** {name}", name, null)); }
+            else if (t.IsArray) { list.Add(($"uint {name}Length", name + "Length", null)); list.Add(($"{t.Cs}* {name}", name, null)); }
+            else if (t.ByRef) list.Add(($"{t.Cs}* {name}", name, null));
+            else list.Add(($"{t.Cs} {name}", name, t));
         }
         var ret = sig.ReturnType;
         if (ret.Cs != "void")
         {
-            if (ret.IsArray) { list.Add(("uint* resultLength", "resultLength")); list.Add(($"{ret.Cs}** result", "result")); }
-            else list.Add(($"{ret.Cs}* result", "result"));
+            if (ret.IsArray) { list.Add(("uint* resultLength", "resultLength", null)); list.Add(($"{ret.Cs}** result", "result", null)); }
+            else list.Add(($"{ret.Cs}* result", "result", ret));
         }
         return list;
     }
@@ -412,7 +415,13 @@ sealed class Generator
         foreach (var (mname, m) in methods)
         {
             var ps = AbiParams(m);
-            s.AppendLine($"    int {mname}({string.Join(", ", ps.Select(p => p.Decl))}) {{ Ccw.NotImplemented(\"{name}.{mname}\"); return unchecked((int)0x80004001); }}");
+            /* a composable factory's CreateInstance(outer, inner, instance): by default the Uno class of the same name */
+            var composable = mname == "CreateInstance" && ps.Count == 3 && ps[0].Name == "@baseInterface" &&
+                             ps[1].Name == "@innerInterface" && ps[2].Name == "result";
+            var body = composable
+                ? "=> ShimFactory.ComposeDefault(this, @baseInterface, @innerInterface, result);"
+                : PropertyBody(mname, ps) ?? $"{{ Ccw.NotImplemented(\"{name}.{mname}\"); return unchecked((int)0x80004001); }}";
+            s.AppendLine($"    int {mname}({string.Join(", ", ps.Select(p => p.Decl))}) {body}");
         }
         s.AppendLine("}");
         s.AppendLine($"public static unsafe class {id}_Vtbl");
@@ -455,6 +464,34 @@ sealed class Generator
         }
         s.AppendLine("}");
         s.AppendLine();
+    }
+
+    /* a default body for a property accessor: the Uno object's property of the same name (Reflect, XamlShim) */
+    static string? PropertyBody(string mname, List<(string Decl, string Name, AbiType? Type)> ps)
+    {
+        if (ps.Count != 1 || ps[0].Type is not { } t || mname.Length < 5) return null;
+        var prop = mname[4..];
+        if (mname.StartsWith("get_") && ps[0].Name == "result")
+            return t.Kind switch
+            {
+                "string" => $"{{ *result = HString.Create((string?)Reflect.Get(this, \"{prop}\") ?? \"\"); return 0; }}",
+                "bool" => $"{{ *result = (byte)(Reflect.Get(this, \"{prop}\") is true ? 1 : 0); return 0; }}",
+                "prim" => $"{{ *result = ({t.Cs})System.Convert.ChangeType(Reflect.Get(this, \"{prop}\")!, typeof({t.Cs}), System.Globalization.CultureInfo.InvariantCulture); return 0; }}",
+                "enum" => $"{{ *result = unchecked(({t.Cs})Reflect.GetInteger(this, \"{prop}\")); return 0; }}",
+                "object" => $"{{ *result = Boxing.Box(Reflect.Get(this, \"{prop}\")); return 0; }}",
+                _ => null,
+            };
+        if (mname.StartsWith("put_") && ps[0].Name == "@value")
+            return t.Kind switch
+            {
+                "string" => $"{{ Reflect.Set(this, \"{prop}\", HString.Read(@value)); return 0; }}",
+                "bool" => $"{{ Reflect.Set(this, \"{prop}\", @value != 0); return 0; }}",
+                "prim" => $"{{ Reflect.Set(this, \"{prop}\", @value); return 0; }}",
+                "enum" => $"{{ Reflect.Set(this, \"{prop}\", (long)@value); return 0; }}",
+                "object" => $"{{ Reflect.Set(this, \"{prop}\", Boxing.Unbox(@value)); return 0; }}",
+                _ => null,
+            };
+        return null;
     }
 
     void EmitDelegate(StringBuilder s, string name, TypeDefinitionHandle h)

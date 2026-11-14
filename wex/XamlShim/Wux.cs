@@ -34,6 +34,15 @@ static class Shim
     static readonly Dictionary<string, Func<ShimObject>> Classes = new()
     {
         ["Microsoft.UI.Xaml.Controls.StackPanel"] = () => new UI_Xaml_Controls_StackPanel(),
+        ["Microsoft.UI.Xaml.Controls.Grid"] = () => new UI_Xaml_Controls_Grid(),
+        ["Microsoft.UI.Xaml.Controls.Border"] = () => new UI_Xaml_Controls_Border(),
+        ["Microsoft.UI.Xaml.Controls.TextBox"] = () => new UI_Xaml_Controls_TextBox(),
+        ["Microsoft.UI.Xaml.Controls.CheckBox"] = () => new UI_Xaml_Controls_CheckBox(),
+        ["Microsoft.UI.Xaml.Controls.Primitives.ToggleButton"] = () => new UI_Xaml_Controls_Primitives_ToggleButton(),
+        ["Microsoft.UI.Xaml.Controls.Image"] = () => new UI_Xaml_Controls_Image(),
+        ["Microsoft.UI.Xaml.Controls.ListView"] = () => new UI_Xaml_Controls_ListView(),
+        ["Microsoft.UI.Xaml.Controls.ItemsControl"] = () => new UI_Xaml_Controls_ItemsControl(),
+        ["Microsoft.UI.Xaml.Controls.ScrollViewer"] = () => new UI_Xaml_Controls_ScrollViewer(),
         ["Microsoft.UI.Xaml.Controls.TextBlock"] = () => new UI_Xaml_Controls_TextBlock(),
         ["Microsoft.UI.Xaml.Controls.Button"] = () => new UI_Xaml_Controls_Button(),
         ["Microsoft.UI.Xaml.Controls.Page"] = () => new UI_Xaml_Controls_Page(),

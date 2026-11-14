@@ -26,11 +26,48 @@ public abstract class ShimFactory : ShimObject
 {
     public abstract string ClassName { get; }
     public override string RuntimeClassName => ClassName;
+    /* default construction: the Uno class of the same name (Windows.UI.Xaml.X is Microsoft.UI.Xaml.X) */
     public virtual unsafe int ActivateInstance(IntPtr* result)
     {
-        Ccw.NotImplemented(ClassName + ".ActivateInstance");
         *result = IntPtr.Zero;
-        return unchecked((int)0x80004001);
+        if (CreateUno(ClassName) is not { } uno)
+        {
+            Ccw.NotImplemented(ClassName + ".ActivateInstance");
+            return unchecked((int)0x80004001);
+        }
+        *result = Ccw.GetDefault(Shim.For(uno));
+        return 0;
+    }
+
+    /* the generated default of every composable factory's CreateInstance(outer, inner, instance) */
+    public static unsafe int ComposeDefault(object factory, IntPtr outer, IntPtr* inner, IntPtr* result)
+    {
+        var f = (ShimFactory)factory;
+        *result = IntPtr.Zero;
+        if (inner != null) *inner = IntPtr.Zero;
+        if (CreateUno(f.ClassName) is not { } uno)
+        {
+            Ccw.NotImplemented(f.ClassName + " factory CreateInstance");
+            return unchecked((int)0x80004001);
+        }
+        return Shim.Compose(Shim.For(uno), outer, inner, result);
+    }
+
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Type?> unoTypes = new();
+
+    public static object? CreateUno(string className)
+    {
+        const string prefix = "Windows.UI.Xaml.";
+        if (!className.StartsWith(prefix, StringComparison.Ordinal)) return null;
+        var type = unoTypes.GetOrAdd(className, name =>
+        {
+            var unoName = "Microsoft.UI.Xaml." + name[prefix.Length..];
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+                if (assembly.GetType(unoName) is { } t && !t.IsAbstract && t.GetConstructor(Type.EmptyTypes) != null)
+                    return t;
+            return null;
+        });
+        return type != null ? Activator.CreateInstance(type) : null;
     }
 }
 
@@ -117,7 +154,12 @@ public static unsafe class Ccw
     }
     public static void Trace(string line) { if (Tracing) Log(line); }
     public static void NotImplemented(string what) => Log("not implemented: " + what);
-    public static int Fail(string what, Exception e) { Log($"exception in {what}: {e}"); return e.HResult != 0 ? e.HResult : unchecked((int)0x80004005); }
+    public static int Fail(string what, Exception e)
+    {
+        if (e is NotImplementedException) return unchecked((int)0x80004001);   /* already logged as not implemented */
+        Log($"exception in {what}: {e}");
+        return e.HResult != 0 ? e.HResult : unchecked((int)0x80004005);
+    }
 
     // ---- vtables ----
 
