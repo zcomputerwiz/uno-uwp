@@ -36,6 +36,10 @@ the build's packages plus `packaging/extra-licenses`), `zipdir.py`, and `adapt_g
 `UwpGeneric.xaml` from upstream's `generic.xaml`.
 
 Status (2026-11-14): an unmodified compiled C++/CX XAML test application (WineExplorer `tests/uwp/xaml/cx-probe`)
-runs on Wine x64 through this component: start, navigation to its compiled page, layout, `Loaded`, `Click` wiring,
-`DispatcherTimer`, `Exit`. Not done: XBF from `resources.pri`, real object lifetimes, UWP default styles and metrics,
-the window size, x86, most members (each logs "not implemented" when called).
+runs on Wine x64 through this component: start-up through `CoreApplication.Run` with the real launch arguments,
+compiled pages from `resources.pri`, navigation, layout at the CoreWindow's size, `Loaded`, `Click` wiring,
+`DispatcherTimer`, `Suspending` and `Resuming`, `Exit`; with the UWP system styles and Selawik its button measures as
+on Windows (76x32) and its title within a pixel. Not done: registering the system styles as default styles (Uno
+side; the ContentPresenter one is left out meanwhile), `ActualWidth` with a margin at `Loaded` (Uno reports the
+desired size), object lifetimes beyond "the framework holds what the application created", x86, most members (each
+logs "not implemented" when called).
