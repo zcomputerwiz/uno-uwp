@@ -110,3 +110,7 @@ Microsoft.UI.Xaml.Controls.NavigationViewItemInvokedEventArgs
 Microsoft.UI.Xaml.Controls.NavigationViewSelectionChangedEventArgs
 --class
 Windows.UI.Xaml.Controls.Primitives.Popup
+--class
+Windows.UI.Xaml.Controls.RichEditBox
+--class
+Windows.UI.Xaml.Data.Binding

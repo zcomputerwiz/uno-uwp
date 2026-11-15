@@ -46,6 +46,14 @@ static class NativeTypes
         var name = HString.Read(type.Name);
         if (type.Kind == 0) return primitives.TryGetValue(name, out var p) ? p : typeof(object);
         if (type.Kind == 1 && Known(name) is { } known) return known;
+        /* an application control: its stand-in for Uno's XAML reader, so that the properties it registers are found
+         * on the type the reader creates (style setters, attributes) */
+        var comma = name.IndexOf(',');
+        if (type.Kind == 2 && NativeControls.StandIn(comma > 0 ? name[..comma].Trim() : name) is { } control)
+        {
+            names.TryAdd(control, name);
+            return control;
+        }
         return StandIn(name);
     }
 
@@ -287,6 +295,10 @@ public unsafe partial class UI_Xaml_DependencyPropertyChangedEventArgs
 
 static unsafe class DependencyProperties
 {
+    /* the properties registered here, by owner type and name (the stand-in of an application control finds its
+     * properties here for Uno's XAML reader) */
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<(Type Owner, string Name), Mux.DependencyProperty> Registered = new();
+
     public static int Register(IntPtr name, TypeName propertyType, TypeName ownerType, IntPtr metadata, bool attached, IntPtr* result)
     {
         var n = HString.Read(name);
@@ -310,6 +322,7 @@ static unsafe class DependencyProperties
         }
         shim = new UI_Xaml_DependencyProperty { UnoObject = dp, PropertyType = pt, NativeMetadata = md };
         Ccw.Wrap(dp, () => shim);
+        Registered[(ot, n)] = dp;
         Ccw.Trace($"{(attached ? "attached " : "")}property {HString.Read(ownerType.Name)}.{n} ({HString.Read(propertyType.Name)})");
         *result = Ccw.Get(shim, Iids.UI_Xaml_IDependencyProperty);
         return 0;

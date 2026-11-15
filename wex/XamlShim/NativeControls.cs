@@ -31,6 +31,34 @@ public static unsafe partial class NativeControls
     static readonly MethodInfo getMember = typeof(NativeControls).GetMethod(nameof(GetMember))!;
     static readonly MethodInfo setMember = typeof(NativeControls).GetMethod(nameof(SetMember))!;
     static readonly MethodInfo provideValue = typeof(NativeControls).GetMethod(nameof(ProvideValue))!;
+    static readonly MethodInfo findProperty = typeof(NativeControls).GetMethod(nameof(FindProperty))!;
+    static readonly HashSet<string> initialized = new();
+
+    /* the dependency property an application type registered under a name (it or a base), or null; asking the
+     * application's metadata for the member first has the type registered its properties */
+    public static Microsoft.UI.Xaml.DependencyProperty? FindProperty(string type, string member)
+    {
+        Microsoft.UI.Xaml.DependencyProperty? Look()
+        {
+            for (var t = standIns.TryGetValue(type, out var s) ? s : null; t != null; t = t.BaseType)
+                if (DependencyProperties.Registered.TryGetValue((t, member), out var dp)) return dp;
+            return null;
+        }
+        if (Look() is { } found) return found;
+        var m = XamlMember(type, member);
+        if (m != IntPtr.Zero) Ccw.ComRelease(m);
+        /* an application class registers its properties in its static constructor, which IXamlType.RunInitializer runs
+         * (as the XAML framework has it run before it looks a type's properties up) */
+        if (Look() == null && initialized.Add(type) && XamlType(type) is var xamlType && xamlType != IntPtr.Zero)
+        {
+            int hr = UI_Xaml_Markup_IXamlType_Call.RunInitializer(xamlType);
+            Ccw.ComRelease(xamlType);
+            Ccw.Log($"{type}: RunInitializer {hr:x8}");
+        }
+        var after = Look();
+        if (after == null) Ccw.Log($"{type}.{member}Property: no dependency property registered");
+        return after;
+    }
 
     /* the application's object behind each stand-in */
     sealed class NativeRef(IntPtr pointer) { public readonly IntPtr Pointer = pointer; }
@@ -79,6 +107,20 @@ public static unsafe partial class NativeControls
                 var dot = e.Name.LocalName.IndexOf('.');
                 if (dot > 0 && ApplicationType(e.Name.Namespace, e.Name.LocalName[..dot]) is { } owner)
                     Add(owner, e.Name.LocalName[(dot + 1)..]);
+                /* a style's setters on an application type (TargetType="CalculatorButton" or "local:CalculatorButton") */
+                if (e.Name.LocalName == "Setter" && e.Attribute("Property")?.Value is { } setter && !setter.Contains('.') &&
+                    !setter.Contains('(') && e.Ancestors().FirstOrDefault(p => p.Name.LocalName == "Style")?.Attribute("TargetType")?.Value is { } target)
+                {
+                    var colon = target.IndexOf(':');
+                    if (colon > 0)
+                    {
+                        if (e.GetNamespaceOfPrefix(target[..colon]) is { } ns && ApplicationType(ns, target[(colon + 1)..]) is { } styled)
+                            Add(styled, setter);
+                    }
+                    else
+                        foreach (var d in e.AncestorsAndSelf().SelectMany(p => p.Attributes()).Where(d => d.IsNamespaceDeclaration))
+                            if (ApplicationType(d.Value, target) is { } candidate) Add(candidate, setter);
+                }
                 foreach (var a in e.Attributes())
                     foreach (Match m in MarkupUse().Matches(a.Value))
                     {
@@ -111,7 +153,14 @@ public static unsafe partial class NativeControls
         }
     }
 
-    public static Type? StandIn(string fullName) => standIns.GetOrAdd(fullName, Define);
+    /* the stand-in of an application control, or null (not a XAML control of the application, or no application yet:
+     * then nothing is remembered) */
+    public static Type? StandIn(string fullName)
+    {
+        if (standIns.TryGetValue(fullName, out var known)) return known;
+        if (UI_Xaml_Application.Current == null) return null;
+        return standIns.GetOrAdd(fullName, Define);
+    }
 
     static Type? Define(string fullName)
     {
@@ -166,6 +215,24 @@ public static unsafe partial class NativeControls
                 property.SetGetMethod(get);
                 property.SetSetMethod(set);
                 forwarded.Add(member);
+            }
+
+            /* the application's dependency properties: Uno's reader finds a property through a static XProperty
+             * member (style setters, attributes), these return the property the application registered for this type */
+            foreach (var member in members ?? [])
+            {
+                var name = member + "Property";
+                if (unoBase.GetProperty(name, BindingFlags.Static | BindingFlags.Public | BindingFlags.FlattenHierarchy) != null ||
+                    unoBase.GetField(name, BindingFlags.Static | BindingFlags.Public | BindingFlags.FlattenHierarchy) != null) continue;
+                var property = builder.DefineProperty(name, PropertyAttributes.None, typeof(Microsoft.UI.Xaml.DependencyProperty), null);
+                var get = builder.DefineMethod("get_" + name, MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.SpecialName |
+                                               MethodAttributes.HideBySig, typeof(Microsoft.UI.Xaml.DependencyProperty), Type.EmptyTypes);
+                var g = get.GetILGenerator();
+                g.Emit(OpCodes.Ldstr, fullName);
+                g.Emit(OpCodes.Ldstr, member);
+                g.Emit(OpCodes.Call, findProperty);
+                g.Emit(OpCodes.Ret);
+                property.SetGetMethod(get);
             }
 
             /* a markup extension's value comes from the application's ProvideValue */
