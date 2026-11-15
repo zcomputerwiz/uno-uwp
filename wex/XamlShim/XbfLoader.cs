@@ -72,6 +72,7 @@ public static unsafe class XbfLoader
         NativeControls.Prepare(element);
         QualifyTargetTypes(element);
         QualifyAttachedSetters(element);
+        AliasResources(element);
         var built = (Mux.UIElement)Mux.Markup.XamlReader.Load(element.ToString());
 
         switch (shim.UnoObject)
@@ -455,6 +456,16 @@ public static unsafe class XbfLoader
         }
         Scan(dict, null);
         return deferred;
+    }
+
+    /* <StaticResource x:Key ResourceKey/> in the resources of an element inside the content (Uno's reader has no type
+     * StaticResource): a ResourceAlias markup extension, whose value is the resource it names */
+    static readonly XNamespace shimNamespace = "using:" + typeof(ResourceAlias).Namespace;
+
+    internal static void AliasResources(XElement root)
+    {
+        foreach (var e in root.Descendants().Where(e => e.Name.LocalName == "StaticResource" && e.Attribute("ResourceKey") != null).ToList())
+            e.Name = shimNamespace + nameof(ResourceAlias);
     }
 
     static object? Find(Mux.ResourceDictionary root, string key) =>
