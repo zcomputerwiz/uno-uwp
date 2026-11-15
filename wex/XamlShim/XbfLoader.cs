@@ -43,7 +43,12 @@ public static unsafe class XbfLoader
             connections.Add((n, int.Parse(id.Value, System.Globalization.CultureInfo.InvariantCulture)));
             id.Remove();
         }
-        if (top.Attribute(X + "ConnectionId") is XAttribute rootId) { Ccw.Log($"root connection {rootId.Value} skipped"); rootId.Remove(); }
+        int? rootConnection = null;
+        if (top.Attribute(X + "ConnectionId") is XAttribute rootId)
+        {
+            rootConnection = int.Parse(rootId.Value, System.Globalization.CultureInfo.InvariantCulture);
+            rootId.Remove();
+        }
 
         var content = top.Elements().Where(e => !e.Name.LocalName.Contains('.')).ToList();
         if (target is not UI_Xaml_DependencyObject shim || content.Count == 0)
@@ -67,11 +72,27 @@ public static unsafe class XbfLoader
         default: Ccw.Log($"cannot set the content of {shim.UnoObject?.GetType().Name}"); return 0;
         }
 
-        if (connections.Count == 0) return 0;
+        if (connections.Count == 0 && rootConnection == null) return 0;
         if (Ccw.QueryInterface(component, Iids.UI_Xaml_Markup_IComponentConnector, out var connector) < 0)
         {
             Ccw.Log("the component has no IComponentConnector");
             return 0;
+        }
+
+        /* x:Bind: the root's binding connector (IComponentConnector2.GetBindingConnector) also receives every
+         * connected element; the root itself is connected too (its own event handlers, the bindings' Loading) */
+        IntPtr bindings = IntPtr.Zero;
+        if (rootConnection is { } root)
+        {
+            if (Ccw.QueryInterface(component, Iids.UI_Xaml_Markup_IComponentConnector2, out var connector2) >= 0)
+            {
+                int hb = UI_Xaml_Markup_IComponentConnector2_Call.GetBindingConnector(connector2, root, component, &bindings);
+                Ccw.ComRelease(connector2);
+                Ccw.Log($"GetBindingConnector {root}: {hb:x8}, {(bindings != IntPtr.Zero ? "bindings" : "none")}");
+                if (hb < 0) bindings = IntPtr.Zero;
+            }
+            int hr = UI_Xaml_Markup_IComponentConnector_Call.Connect(connector, root, component);
+            Ccw.Log($"Connect {root} (root): {hr:x8}");
         }
         foreach (var (n, id) in connections)
         {
@@ -80,9 +101,11 @@ public static unsafe class XbfLoader
             var wrapper = Shim.For(found);
             var p = Ccw.Get(wrapper);
             int hr = UI_Xaml_Markup_IComponentConnector_Call.Connect(connector, id, p);
-            Ccw.Log($"Connect {id} {n} ({wrapper.RuntimeClassName}): {hr:x8}");
+            int hb = bindings != IntPtr.Zero ? UI_Xaml_Markup_IComponentConnector_Call.Connect(bindings, id, p) : 0;
+            Ccw.Log($"Connect {id} {n} ({wrapper.RuntimeClassName}): {hr:x8}" + (bindings != IntPtr.Zero ? $", bindings {hb:x8}" : ""));
             Ccw.ComRelease(p);
         }
+        if (bindings != IntPtr.Zero) Ccw.ComRelease(bindings);
         Ccw.ComRelease(connector);
         return 0;
     }
