@@ -33,6 +33,15 @@ public static unsafe class Boxing
     public static IntPtr Box(object? value)
     {
         IntPtr result = IntPtr.Zero;
+        /* the application's objects carried through Uno: the application's object itself */
+        if (value is NativeObject o) { Ccw.ComAddRef(o.Pointer); return o.Pointer; }
+        if (value is NativeCommand c) { Ccw.ComAddRef(c.Pointer); return c.Pointer; }
+        /* a stand-in of an application object that is not an element (a converter): the application's object itself */
+        if (value is NativeStandInObject && NativeControls.NativeOf(value) is var native && native != IntPtr.Zero)
+        {
+            Ccw.ComAddRef(native);
+            return native;
+        }
         /* framework objects (elements, event arguments, ...) through their shims */
         if (value != null && value is not string && !value.GetType().IsPrimitive && Shim.TryFor(value) is { } shim)
             return Ccw.Get(shim);
@@ -59,7 +68,11 @@ public static unsafe class Boxing
         if (p == IntPtr.Zero) return null;
         if (Shim.UnoOf(p) is { } uno) return uno;
         if (Ccw.QueryInterface(p, Iids.Foundation_IPropertyValue, out var pv) < 0)
-            throw new NotSupportedException("an object that is neither a XAML object nor a property value");
+        {
+            /* the application's own objects: a command as .NET's ICommand, anything else kept as it is */
+            if (Ccw.QueryInterface(p, Iids.UI_Xaml_Input_ICommand, out var command) >= 0) return new NativeCommand(command);
+            return new NativeObject(p);
+        }
         try
         {
             int type;

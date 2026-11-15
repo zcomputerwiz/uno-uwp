@@ -55,6 +55,16 @@ public static class Reflect
 
     public static object? Get(object shim, string name)
     {
+        /* a statics interface (Popup.IsOpenProperty): the Uno class's static member of that name */
+        if (shim is ShimFactory factory)
+        {
+            const BindingFlags statics = BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy;
+            var type = ShimFactory.UnoTypeOf(factory.ClassName);
+            if (type?.GetProperty(name, statics) is { } sp) return sp.GetValue(null);
+            if (type?.GetField(name, statics) is { } sf) return sf.GetValue(null);
+            Ccw.NotImplemented($"{factory.ClassName}.{name} (no Uno static member)");
+            return null;
+        }
         if (Stored(shim, name, out var values)) return values.TryGetValue(name, out var v) ? v : null;
         var (target, property) = Find(shim, name);
         return property.GetValue(target);

@@ -57,6 +57,16 @@ public static unsafe class XbfLoader
             return 0;
         }
         if (content.Count > 1) Ccw.Log($"{content.Count} content elements: only the first is loaded");
+
+        /* the root's own resources (<Page.Resources>): the element's Resources, before its content is read, so that
+         * the content's resources and the application's code (x:Bind converters) find them */
+        if (top.Elements().FirstOrDefault(e => e.Name.LocalName.EndsWith(".Resources", StringComparison.Ordinal)) is { } resources &&
+            shim.UnoObject is Mux.FrameworkElement owner)
+        {
+            var entries = resources.Elements().Select(e => new XElement(e)).ToList();
+            if (entries.Count > 0) owner.Resources = BuildDictionary(top, entries, Path.GetFileNameWithoutExtension(relative));
+        }
+
         var element = new XElement(content[0]);
         foreach (var ns in top.Attributes().Where(a => a.IsNamespaceDeclaration)) element.SetAttributeValue(ns.Name, ns.Value);
         ResolveConditionalNamespaces(element);
@@ -176,6 +186,12 @@ public static unsafe class XbfLoader
         var property = top.Elements().FirstOrDefault(e => e.Name.LocalName.EndsWith(".Resources", StringComparison.Ordinal));
         var children = (property ?? top).Elements().Where(e => property != null || !e.Name.LocalName.Contains('.')).ToList();
         if (children.Count == 0) { Ccw.Log("App.xaml has no Application.Resources"); return new Mux.ResourceDictionary(); }
+        return BuildDictionary(top, children, "application");
+    }
+
+    /* a resource dictionary from the entries of a compiled XAML file's root (its X.Resources) */
+    static Mux.ResourceDictionary BuildDictionary(XElement top, List<XElement> children, string what)
+    {
         foreach (var e in children.SelectMany(c => c.DescendantsAndSelf())) e.Attribute(X + "ConnectionId")?.Remove();
 
         var dict = children.Count == 1 && children[0].Name.LocalName == "ResourceDictionary"
@@ -192,10 +208,10 @@ public static unsafe class XbfLoader
         {
             var whole = (Mux.ResourceDictionary)Mux.Markup.XamlReader.Load(dict.ToString());
             ApplyDeferred(whole, deferred);
-            Ccw.Log($"application resources: {whole.Count} entries, {whole.MergedDictionaries.Count} merged, {whole.ThemeDictionaries.Count} themes");
+            Ccw.Log($"{what} resources: {whole.Count} entries, {whole.MergedDictionaries.Count} merged, {whole.ThemeDictionaries.Count} themes");
             return whole;
         }
-        catch (Exception e) { Ccw.Log($"application resources as a whole: {FirstLine(e)}; loading them one by one"); }
+        catch (Exception e) { Ccw.Log($"{what} resources as a whole: {FirstLine(e)}; loading them one by one"); }
 
         var result = new Mux.ResourceDictionary();
         Mux.ResourceDictionary LoadDictionary(XElement element)
@@ -207,10 +223,10 @@ public static unsafe class XbfLoader
                 copy = new XElement(dict.Name, namespaces.Select(a => new XAttribute(a)), new XElement(element));
             return (Mux.ResourceDictionary)Mux.Markup.XamlReader.Load(copy.ToString());
         }
-        void Try(string what, Action load)
+        void Try(string entry, Action load)
         {
-            try { load(); Ccw.Log($"application resource {what}: loaded"); }
-            catch (Exception e) { Ccw.Log($"application resource {what}: {(Ccw.Calls ? e.ToString() : FirstLine(e))}"); }
+            try { load(); Ccw.Log($"{what} resource {entry}: loaded"); }
+            catch (Exception e) { Ccw.Log($"{what} resource {entry}: {(Ccw.Calls ? e.ToString() : FirstLine(e))}"); }
         }
         foreach (var child in dict.Elements())
         {
@@ -234,7 +250,7 @@ public static unsafe class XbfLoader
             }
         }
         ApplyDeferred(result, deferred);
-        Ccw.Log($"application resources: {result.Count} entries, {result.MergedDictionaries.Count} merged, {result.ThemeDictionaries.Count} themes");
+        Ccw.Log($"{what} resources: {result.Count} entries, {result.MergedDictionaries.Count} merged, {result.ThemeDictionaries.Count} themes");
         return result;
     }
 

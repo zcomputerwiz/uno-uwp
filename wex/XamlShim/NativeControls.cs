@@ -169,7 +169,8 @@ public static unsafe partial class NativeControls
         string? baseName = null;
         try { baseName = WindowsBase(xamlType); }
         finally { Ccw.ComRelease(xamlType); }
-        var unoBase = baseName != null ? NativeTypes.UnoType(baseName) : null;
+        /* not a XAML element (a converter, an object of the resources): a plain object forwarding to the application's */
+        var unoBase = baseName != null ? NativeTypes.UnoType(baseName) : typeof(NativeStandInObject);
         var baseCtor = unoBase?.GetConstructor(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, Type.EmptyTypes);
         if (unoBase == null || unoBase.IsSealed || baseCtor == null || !(baseCtor.IsPublic || baseCtor.IsFamily || baseCtor.IsFamilyOrAssembly))
         {
@@ -253,6 +254,9 @@ public static unsafe partial class NativeControls
     }
 
     static IntPtr Native(object self) => natives.TryGetValue(self, out var n) ? n.Pointer : IntPtr.Zero;
+
+    /* the application's object behind a stand-in (not AddRef'd), or zero */
+    public static IntPtr NativeOf(object self) => Native(self);
 
     /* the IXamlMember of an application type's member (AddRef'd), or zero */
     static IntPtr XamlMember(string type, string member)
@@ -364,7 +368,8 @@ public static unsafe partial class NativeControls
         if (hr < 0) { Ccw.Log($"ActivateInstance {fullName}: {hr:x8}"); return; }
         lock (Shim.Kept) Shim.Kept.Add(instance);
         natives.AddOrUpdate(self, new NativeRef(instance));
-        if (Shim.UnoOf(instance) != self) Ccw.Log($"native {fullName}: the application's control is not over its stand-in");
+        if (self is not NativeStandInObject && Shim.UnoOf(instance) != self)
+            Ccw.Log($"native {fullName}: the application's control is not over its stand-in");
     }
 
     /* the stand-in waiting for its base class's factory, when it is one of that class */

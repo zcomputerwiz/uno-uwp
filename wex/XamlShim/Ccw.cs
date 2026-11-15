@@ -57,6 +57,21 @@ public abstract class ShimFactory : ShimObject
 
     static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Type?> unoTypes = new();
 
+    /* the Uno class of a runtime class name, or null */
+    public static Type? UnoTypeOf(string className)
+    {
+        const string prefix = "Windows.UI.Xaml.", winui2 = "Microsoft.UI.Xaml.";
+        if (!className.StartsWith(prefix, StringComparison.Ordinal) && !className.StartsWith(winui2, StringComparison.Ordinal)) return null;
+        return unoTypes.GetOrAdd(className, name =>
+        {
+            var unoName = name.StartsWith(winui2, StringComparison.Ordinal) ? name : "Microsoft.UI.Xaml." + name[prefix.Length..];
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+                if (!assembly.IsDynamic && assembly.GetType(unoName) is { } t)
+                    return t;
+            return null;
+        });
+    }
+
     public static object? CreateUno(string className)
     {
         /* Windows.UI.Xaml.X is Uno's Microsoft.UI.Xaml.X; WinUI 2's Microsoft.UI.Xaml.X is Uno's class of that name */
