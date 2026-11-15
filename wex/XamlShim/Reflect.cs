@@ -3,31 +3,48 @@
 //
 // The generated default property accessors: the Windows.UI.Xaml property of a shim is the Uno object's public
 // property of the same name. Values arrive already converted by their ABI kind (string, bool, number, enum as long,
-// object as its Uno object or boxed value) and are converted to the Uno property's type here. A shim without a Uno
-// object, or a Uno type without the property, logs "not implemented" and gives E_NOTIMPL.
+// object as its Uno object or boxed value) and are converted to the Uno property's type here. A property Uno does not
+// have (Application.HighContrastAdjustment, ...) is kept on the shim: what was set is read back, the default otherwise,
+// and the first use is logged ("stored only"), so that applications setting Windows-only properties go on.
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace XamlShim.Abi;
 
 public static class Reflect
 {
     static readonly ConcurrentDictionary<(Type, string), PropertyInfo?> properties = new();
+    static readonly ConditionalWeakTable<object, ConcurrentDictionary<string, object?>> stored = new();
+    static readonly ConcurrentDictionary<string, bool> storedLogged = new();
+
+    /* a property Uno does not have: its value kept on the shim */
+    static bool Stored(object shim, string name, out ConcurrentDictionary<string, object?> values)
+    {
+        var target = ((ShimObject)shim).UnoObject;
+        bool missing = target == null || properties.GetOrAdd((target.GetType(), name), key => Lookup(key.Item1, key.Item2)) == null;
+        values = stored.GetOrCreateValue(shim);
+        if (missing && storedLogged.TryAdd($"{((ShimObject)shim).RuntimeClassName}.{name}", true))
+            Ccw.Log($"stored only: {((ShimObject)shim).RuntimeClassName}.{name} (no Uno property)");
+        return missing;
+    }
+
+    static PropertyInfo? Lookup(Type type, string name)
+    {
+        /* the most derived public instance property of that name that is not an indexer */
+        for (var t = type; t != null; t = t.BaseType)
+        {
+            var p = t.GetProperty(name, BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+            if (p != null && p.GetIndexParameters().Length == 0) return p;
+        }
+        return null;
+    }
 
     static (object Target, PropertyInfo Property) Find(object shim, string name)
     {
         var target = ((ShimObject)shim).UnoObject;
-        var property = target == null ? null : properties.GetOrAdd((target.GetType(), name), key =>
-        {
-            /* the most derived public instance property of that name that is not an indexer */
-            for (var t = key.Item1; t != null; t = t.BaseType)
-            {
-                var p = t.GetProperty(key.Item2, BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
-                if (p != null && p.GetIndexParameters().Length == 0) return p;
-            }
-            return null;
-        });
+        var property = target == null ? null : properties.GetOrAdd((target.GetType(), name), key => Lookup(key.Item1, key.Item2));
         if (target == null || property == null)
         {
             Ccw.NotImplemented($"{((ShimObject)shim).RuntimeClassName}.{name} (no Uno property)");
@@ -38,6 +55,7 @@ public static class Reflect
 
     public static object? Get(object shim, string name)
     {
+        if (Stored(shim, name, out var values)) return values.TryGetValue(name, out var v) ? v : null;
         var (target, property) = Find(shim, name);
         return property.GetValue(target);
     }
@@ -47,12 +65,14 @@ public static class Reflect
     /* struct properties: the ABI struct and Uno's struct of the same shape, member by member (StructConvert) */
     public static T GetStruct<T>(object shim, string name) where T : struct
     {
+        if (Stored(shim, name, out var values)) return values.TryGetValue(name, out var v) && v is T t ? t : default;
         var value = Get(shim, name);
         return value == null ? default : (T)StructConvert.ToAbi(value, typeof(T));
     }
 
     public static void SetStruct<T>(object shim, string name, T value) where T : struct
     {
+        if (Stored(shim, name, out var values)) { values[name] = value; return; }
         var (target, property) = Find(shim, name);
         var type = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
         property.SetValue(target, StructConvert.ToUno(value, type));
@@ -60,6 +80,7 @@ public static class Reflect
 
     public static void Set(object shim, string name, object? value)
     {
+        if (Stored(shim, name, out var values)) { values[name] = value; return; }
         var (target, property) = Find(shim, name);
         if (!property.CanWrite)
         {

@@ -66,3 +66,17 @@ Windows.UI.Xaml.Controls.ScrollViewer
 Windows.Foundation.IPropertyValue
 --interface
 Windows.Foundation.IPropertyValueStatics
+--class
+Windows.UI.Xaml.DependencyObject
+--class
+Windows.UI.Xaml.DependencyProperty
+--class
+Windows.UI.Xaml.PropertyMetadata
+--class
+Windows.UI.Xaml.DependencyPropertyChangedEventArgs
+--delegate
+Windows.UI.Xaml.PropertyChangedCallback
+--delegate
+Windows.UI.Xaml.CreateDefaultValueCallback
+--delegate
+Windows.UI.Xaml.DependencyPropertyChangedCallback
