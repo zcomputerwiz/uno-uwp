@@ -313,6 +313,17 @@ public unsafe partial class UI_Xaml_Window
         return 0;
     }
 
+    /* Window.SetTitleBar: the element would be the drag area of a view extended into the title bar; Wine's CoreWindow
+     * keeps its standard frame (CoreApplicationViewTitleBar is never extended), so it is only kept */
+    public Mux.UIElement? TitleBar;
+
+    int IUI_Xaml_IWindow2_Abi.SetTitleBar(IntPtr value)
+    {
+        TitleBar = Shim.UnoOf(value) as Mux.UIElement;
+        Ccw.Log($"Window.SetTitleBar {TitleBar?.GetType().Name ?? "null"}: kept (the frame is the standard one)");
+        return 0;
+    }
+
     /* the view's CoreWindow and its CoreDispatcher (Wine's twinapi.appcore), as on Windows; null without a view */
     int IUI_Xaml_IWindow_Abi.get_CoreWindow(IntPtr* result)
     {
