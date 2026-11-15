@@ -135,6 +135,7 @@ internal sealed unsafe class CcwState
             Ccw.Trace($"QI {Managed.RuntimeClassName} {iid}: no interface");
             return unchecked((int)0x80004002);
         }
+        if (Ccw.Calls) Ccw.Log($"QI {Managed.RuntimeClassName} {iid}: ok");
         /* COM aggregation: the reference goes where the returned pointer's Release will go, which for every block but
          * the non-delegating inner one is the outer object */
         if (Outer != IntPtr.Zero && *result != Inner) Ccw.ComAddRef(Outer);

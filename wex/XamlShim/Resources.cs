@@ -29,6 +29,7 @@ public sealed unsafe partial class UI_Xaml_ResourceDictionary
 
     static int Run(string what, Func<int> body)
     {
+        if (Ccw.Calls) Ccw.Log("call ResourceDictionary " + what);
         try { return body(); }
         catch (Exception e) { return Ccw.Fail(what, e); }
     }

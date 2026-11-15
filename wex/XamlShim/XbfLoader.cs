@@ -109,6 +109,7 @@ public static unsafe class XbfLoader
         var xbf = ReadXbf("App.xbf");
         if (xbf == null) return new Mux.ResourceDictionary();
         var top = Decompile(xbf).Root!;
+        if (Ccw.Calls) File.WriteAllText(Path.Combine(Path.GetTempPath(), "xamlshim-App.xaml"), top.ToString());
         /* XbfKit writes Application.Resources as the root's content (no property element); either form is taken */
         var property = top.Elements().FirstOrDefault(e => e.Name.LocalName.EndsWith(".Resources", StringComparison.Ordinal));
         var children = (property ?? top).Elements().Where(e => property != null || !e.Name.LocalName.Contains('.')).ToList();
@@ -141,7 +142,7 @@ public static unsafe class XbfLoader
         void Try(string what, Action load)
         {
             try { load(); Ccw.Log($"application resource {what}: loaded"); }
-            catch (Exception e) { Ccw.Log($"application resource {what}: {FirstLine(e)}"); }
+            catch (Exception e) { Ccw.Log($"application resource {what}: {(Ccw.Calls ? e.ToString() : FirstLine(e))}"); }
         }
         foreach (var child in dict.Elements())
         {
