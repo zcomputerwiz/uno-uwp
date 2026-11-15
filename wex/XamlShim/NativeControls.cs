@@ -32,6 +32,7 @@ public static unsafe partial class NativeControls
     static readonly MethodInfo setMember = typeof(NativeControls).GetMethod(nameof(SetMember))!;
     static readonly MethodInfo provideValue = typeof(NativeControls).GetMethod(nameof(ProvideValue))!;
     static readonly MethodInfo findProperty = typeof(NativeControls).GetMethod(nameof(FindProperty))!;
+    static readonly MethodInfo setText = typeof(NativeControls).GetMethod(nameof(SetText))!;
     static readonly HashSet<string> initialized = new();
 
     /* the dependency property an application type registered under a name (it or a base), or null; asking the
@@ -166,8 +167,8 @@ public static unsafe partial class NativeControls
     {
         var xamlType = XamlType(fullName);
         if (xamlType == IntPtr.Zero) { Ccw.Log($"native type {fullName}: not in the application's metadata"); return null; }
-        string? baseName = null;
-        try { baseName = WindowsBase(xamlType); }
+        string? baseName = null, content = null;
+        try { baseName = WindowsBase(xamlType); content = ContentMember(xamlType); }
         finally { Ccw.ComRelease(xamlType); }
         /* not a XAML element (a converter, an object of the resources): a plain object forwarding to the application's */
         var unoBase = baseName != null ? NativeTypes.UnoType(baseName) : typeof(NativeStandInObject);
@@ -177,7 +178,10 @@ public static unsafe partial class NativeControls
             Ccw.Log($"native type {fullName}: base {baseName ?? "none"} has no Uno class to stand in for it");
             return null;
         }
-        UsedMembers().TryGetValue(fullName, out var members);
+        UsedMembers().TryGetValue(fullName, out var used);
+        var members = new List<string>(used ?? []);
+        /* implicit content goes to the application's content property */
+        if (content != null && !members.Contains(content)) members.Add(content);
         lock (module)
         {
             var builder = module.DefineType(fullName, TypeAttributes.Public | TypeAttributes.Class, unoBase);
@@ -236,6 +240,37 @@ public static unsafe partial class NativeControls
                 property.SetGetMethod(get);
             }
 
+            /* Uno's reader takes the content property from ContentPropertyAttribute on the type or a base */
+            var contentAttribute = typeof(Microsoft.UI.Xaml.Markup.ContentPropertyAttribute);
+            var nameField = contentAttribute.GetField(nameof(Microsoft.UI.Xaml.Markup.ContentPropertyAttribute.Name))!;
+            if (content != null)
+                builder.SetCustomAttribute(new CustomAttributeBuilder(contentAttribute.GetConstructor(Type.EmptyTypes)!, [],
+                                                                      [nameField], [content]));
+            /* a value type of the application (an enum written as <local:Kind>Value</local:Kind>): the text is the
+             * content, made into the application's value by its CreateFromString */
+            else if (unoBase == typeof(NativeStandInObject))
+            {
+                const string text = "WexText";
+                var property = builder.DefineProperty(text, PropertyAttributes.None, typeof(string), null);
+                var get = builder.DefineMethod("get_" + text, MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig,
+                                               typeof(string), Type.EmptyTypes);
+                var g = get.GetILGenerator();
+                g.Emit(OpCodes.Ldnull);
+                g.Emit(OpCodes.Ret);
+                var set = builder.DefineMethod("set_" + text, MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig,
+                                               null, [typeof(string)]);
+                var s = set.GetILGenerator();
+                s.Emit(OpCodes.Ldarg_0);
+                s.Emit(OpCodes.Ldstr, fullName);
+                s.Emit(OpCodes.Ldarg_1);
+                s.Emit(OpCodes.Call, setText);
+                s.Emit(OpCodes.Ret);
+                property.SetGetMethod(get);
+                property.SetSetMethod(set);
+                builder.SetCustomAttribute(new CustomAttributeBuilder(contentAttribute.GetConstructor(Type.EmptyTypes)!, [],
+                                                                      [nameField], [text]));
+            }
+
             /* a markup extension's value comes from the application's ProvideValue */
             if (typeof(Microsoft.UI.Xaml.Markup.MarkupExtension).IsAssignableFrom(unoBase))
             {
@@ -248,7 +283,8 @@ public static unsafe partial class NativeControls
             }
             var type = builder.CreateType();
             Ccw.Log($"native type {fullName}: stand-in over {unoBase.FullName}" +
-                    (forwarded.Count > 0 ? $", members {string.Join(" ", forwarded)}" : ""));
+                    (forwarded.Count > 0 ? $", members {string.Join(" ", forwarded)}" : "") +
+                    (content != null ? $", content {content}" : ""));
             return type;
         }
     }
@@ -333,6 +369,37 @@ public static unsafe partial class NativeControls
             return result;
         }
         finally { Ccw.ComRelease(type); }
+    }
+
+    /* a value stand-in's text: the application's value of its type from that text becomes the native object */
+    public static void SetText(object self, string type, string text)
+    {
+        var xamlType = XamlType(type);
+        if (xamlType == IntPtr.Zero) return;
+        var h = HString.Create(text);
+        IntPtr value = IntPtr.Zero;
+        int hr = UI_Xaml_Markup_IXamlType_Call.CreateFromString(xamlType, h, &value);
+        HString.Delete(h);
+        Ccw.ComRelease(xamlType);
+        if (Ccw.Calls || hr < 0) Ccw.Log($"{type} from \"{text}\": {hr:x8}");
+        if (hr < 0 || value == IntPtr.Zero) return;
+        lock (Shim.Kept) Shim.Kept.Add(value);
+        natives.AddOrUpdate(self, new NativeRef(value));
+    }
+
+    /* the name of a XAML type's content property, or null */
+    static string? ContentMember(IntPtr xamlType)
+    {
+        IntPtr member = IntPtr.Zero, h;
+        if (UI_Xaml_Markup_IXamlType_Call.get_ContentProperty(xamlType, &member) < 0 || member == IntPtr.Zero) return null;
+        try
+        {
+            if (UI_Xaml_Markup_IXamlMember_Call.get_Name(member, &h) < 0) return null;
+            var name = HString.Read(h);
+            HString.Delete(h);
+            return string.IsNullOrEmpty(name) ? null : name;
+        }
+        finally { Ccw.ComRelease(member); }
     }
 
     /* a markup extension stand-in's value: the application's IMarkupExtensionOverrides.ProvideValue */

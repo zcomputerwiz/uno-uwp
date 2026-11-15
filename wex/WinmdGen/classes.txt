@@ -120,3 +120,11 @@ Windows.UI.Xaml.Markup.IComponentConnector2
 Windows.UI.Xaml.Data.IValueConverter
 --interface
 Windows.UI.Xaml.Input.ICommand
+--class
+Windows.UI.Xaml.Controls.DataTemplateSelector
+--class
+Windows.UI.Xaml.PropertyPath
+--class
+Windows.UI.Xaml.Controls.RadioButton
+--class
+Windows.UI.Xaml.StateTriggerBase
