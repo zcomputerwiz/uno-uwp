@@ -306,6 +306,28 @@ public unsafe partial class UI_Xaml_Window
         return 0;
     }
 
+    int IUI_Xaml_IWindow_Abi.get_Content(IntPtr* result)
+    {
+        var content = UnoWindow?.Content;
+        *result = content != null ? Ccw.Get(Shim.For(content), Iids.UI_Xaml_IUIElement) : IntPtr.Zero;
+        return 0;
+    }
+
+    /* the view's CoreWindow and its CoreDispatcher (Wine's twinapi.appcore), as on Windows; null without a view */
+    int IUI_Xaml_IWindow_Abi.get_CoreWindow(IntPtr* result)
+    {
+        *result = FrameworkView.CoreWindow;
+        if (*result != IntPtr.Zero) Ccw.ComAddRef(*result);
+        return 0;
+    }
+
+    int IUI_Xaml_IWindow_Abi.get_Dispatcher(IntPtr* result)
+    {
+        *result = IntPtr.Zero;
+        if (FrameworkView.CoreWindow == IntPtr.Zero) return 0;
+        return UI_Core_ICoreWindow_Call.get_Dispatcher(FrameworkView.CoreWindow, result);
+    }
+
     int IUI_Xaml_IWindow_Abi.Activate()
     {
         /* the first layout already at the CoreWindow's size, as on Windows: place Uno's window before it is shown */
