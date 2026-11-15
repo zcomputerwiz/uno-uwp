@@ -2,7 +2,7 @@
 # Copyright 2026 WineExplorer contributors
 """Write NOTICE.txt for the XamlShim release: every NuGet package of the build (project.assets.json, net10.0-desktop
 win-x64, the runtime pack included) with its licence from the nuspec and the full text of the licence and notice files
-the package ships. usage: collect_notices.py ASSETS_JSON NUGET_ROOT OUT"""
+the package ships. usage: collect_notices.py ASSETS_JSON NUGET_ROOT OUT [PACK/VERSION ...]"""
 import json, os, re, sys, glob
 import xml.etree.ElementTree as ET
 
@@ -12,8 +12,15 @@ libs = {k: v for k, v in data['libraries'].items() if v.get('type') == 'package'
 names = set()
 for target, entries in data['targets'].items():
     names.update(entries.keys())
-# the runtime packs of a self-contained publish are not in the assets file
-for pack in sys.argv[4:]:
+# the runtime packs of a self-contained publish are not among the libraries: the ones named on the command line, else
+# the .NET and Windows Desktop runtime packs the restore downloaded (ASP.NET Core is not in the output)
+packs = sys.argv[4:]
+if not packs:
+    for framework in data['project']['frameworks'].values():
+        for dep in framework.get('downloadDependencies', []):
+            if re.match(r'Microsoft\.(NETCore|WindowsDesktop)\.App\.Runtime\.', dep['name']):
+                packs.append(dep['name'] + '/' + dep['version'].strip('[]').split(',')[0].strip())
+for pack in packs:
     ident, version = pack.split('/')
     libs[pack] = {'path': f'{ident.lower()}/{version}', 'type': 'package'}
     names.add(pack)

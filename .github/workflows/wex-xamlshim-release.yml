@@ -1,0 +1,144 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 WineExplorer contributors
+#
+# Builds the XamlShim component (folder wex/, WineExplorer's Windows.UI.Xaml on Uno) and publishes it as a GitHub
+# release. A tag wex-xamlshim-vX.Y.Z builds that commit and publishes the release; the tag's annotation, if any, opens
+# the release description. A push to wex/xamlshim that touches wex/ only builds (version 0.0.0, an artifact). Run by hand (Actions, "wex XamlShim release") to build a version as an artifact only, or
+# with "publish" to also create the release and its tag at the commit that was built.
+# The build itself is wex/packaging/build-release.ps1, which works the same on a developer's machine.
+
+name: wex XamlShim release
+
+on:
+  push:
+    tags:
+      - 'wex-xamlshim-v*'
+    # a change to the component builds it (as version 0.0.0, not published)
+    branches:
+      - 'wex/xamlshim'
+    paths:
+      - 'wex/**'
+      - '.github/workflows/wex-xamlshim-release.yml'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (MAJOR.MINOR.PATCH)'
+        required: true
+        type: string
+      publish:
+        description: 'Create the release wex-xamlshim-v<version> and its tag at this commit'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wex-xamlshim-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build win-x64
+    if: github.repository == 'zcomputerwiz/uno-uwp'
+    runs-on: windows-2025
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    env:
+      NUGET_PACKAGES: ${{ github.workspace }}\.nuget\packages
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Version
+        id: version
+        shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $version = if ($env:REF_TYPE -eq 'tag') { $env:REF_NAME -replace '^wex-xamlshim-v', '' }
+                     elseif ($env:INPUT_VERSION) { $env:INPUT_VERSION } else { '0.0.0' }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "version must be MAJOR.MINOR.PATCH: '$version'" }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=wex-xamlshim-v$version" >> $env:GITHUB_OUTPUT
+
+      - name: Release notes from the tag annotation
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git fetch --no-tags --depth=1 origin "+refs/tags/${env:TAG}:refs/tags/${env:TAG}"
+          if ((git cat-file -t "refs/tags/${env:TAG}") -eq 'tag') {
+            git tag -l --format='%(contents)' $env:TAG | Out-File -Encoding utf8 "$env:RUNNER_TEMP\notes-in.md"
+          }
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+
+      - name: Build
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: >
+          ./wex/packaging/build-release.ps1 -Version $env:VERSION -OutDir "$env:RUNNER_TEMP\release"
+          -Commit $env:GITHUB_SHA -NotesFile "$env:RUNNER_TEMP\notes-in.md"
+
+      - name: Summary
+        shell: pwsh
+        run: Get-Content "$env:RUNNER_TEMP\release\notes.md" >> $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xamlshim-${{ steps.version.outputs.version }}
+          path: ${{ runner.temp }}\release\*
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish release
+    needs: build
+    if: github.ref_type == 'tag' || inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: xamlshim-${{ needs.build.outputs.version }}
+          path: release
+
+      - name: Verify
+        working-directory: release
+        run: sha256sum -c SHA256SUMS
+
+      - name: Create the release
+        working-directory: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.build.outputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          # a published version is never replaced: WineExplorer setup pins its hashes
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "::error::release $TAG exists already"
+            exit 1
+          fi
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "XamlShim $VERSION" --notes-file notes.md \
+            "xamlshim-$VERSION-win-x64.zip" TERMS.txt LICENSE.txt NOTICE.txt SHA256SUMS
