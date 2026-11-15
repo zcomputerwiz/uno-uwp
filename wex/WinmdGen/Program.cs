@@ -449,7 +449,7 @@ sealed class Generator
             var decl = string.Join(", ", ps.Select(p => p.Decl).Prepend("IntPtr @this"));
             var call = string.Join(", ", ps.Select(p => p.Name));
             s.AppendLine($"    [UnmanagedCallersOnly(CallConvs = new[] {{ typeof(CallConvStdcall) }})] static int M{i}({decl})");
-            s.AppendLine($"    {{ try {{ return ((I{id}_Abi)Ccw.Target(@this)).{mname}({call}); }} catch (Exception ex__) {{ return Ccw.Fail(\"{name}.{mname}\", ex__); }} }}");
+            s.AppendLine($"    {{ if (Ccw.Calls) Ccw.Log(\"call {name}.{mname}\"); try {{ return ((I{id}_Abi)Ccw.Target(@this)).{mname}({call}); }} catch (Exception ex__) {{ return Ccw.Fail(\"{name}.{mname}\", ex__); }} }}");
         }
         s.AppendLine("}");
         s.AppendLine($"public static unsafe class {id}_Call");

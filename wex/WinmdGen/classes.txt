@@ -82,3 +82,7 @@ Windows.UI.Xaml.CreateDefaultValueCallback
 Windows.UI.Xaml.DependencyPropertyChangedCallback
 --class
 Windows.UI.Xaml.SizeHelper
+--class
+Windows.UI.Xaml.ResourceDictionary
+--class
+Windows.UI.Xaml.Media.SolidColorBrush

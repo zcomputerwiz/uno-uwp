@@ -93,10 +93,14 @@ internal sealed unsafe class CcwState
             if (ClassTable.Factory.TryGetValue(f.ClassName, out var t)) list.AddRange(t);
             Table = list.ToArray();
         }
-        else if (managed.CustomInterfaces is { } custom)
-            Table = custom;
-        else if (!ClassTable.Interfaces.TryGetValue(managed.RuntimeClassName, out Table!))
-            Table = Array.Empty<(Guid, IntPtr, Func<object, bool>)>();
+        else
+        {
+            /* a runtime class's generated interfaces, then those written by hand (a generic IMap<K,V>, ...) */
+            if (!ClassTable.Interfaces.TryGetValue(managed.RuntimeClassName, out Table!))
+                Table = Array.Empty<(Guid, IntPtr, Func<object, bool>)>();
+            if (managed.CustomInterfaces is { } custom)
+                Table = [.. Table, .. custom];
+        }
     }
 
     public IntPtr Block(Guid iid, IntPtr vtbl) => Blocks.GetOrAdd(iid, _ =>
@@ -152,6 +156,8 @@ public static unsafe class Ccw
     static readonly string logPath = Path.Combine(Path.GetTempPath(), "xamlshim.txt");
     static readonly object logLock = new();
     public static bool Tracing = Environment.GetEnvironmentVariable("XAMLSHIM_TRACE") == "1";
+    /* every call into a generated interface, by name (XAMLSHIM_CALLS=1): which members an application uses */
+    public static bool Calls = Environment.GetEnvironmentVariable("XAMLSHIM_CALLS") == "1";
 
     public static void Log(string line)
     {

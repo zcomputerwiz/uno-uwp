@@ -26,21 +26,9 @@ public static unsafe class XbfLoader
         const string scheme = "ms-appx:///";
         if (!location.StartsWith(scheme, StringComparison.OrdinalIgnoreCase)) { Ccw.Log($"unsupported location {location}"); return unchecked((int)0x80070057); }
         var relative = Path.ChangeExtension(location[scheme.Length..], ".xbf");
-        var root = Path.GetDirectoryName(Environment.ProcessPath) ?? ".";
-        var xbf = FromPri(root, relative);
-        if (xbf == null)
-        {
-            var path = Path.Combine(root, relative.Replace('/', '\\'));
-            if (!File.Exists(path)) { Ccw.Log($"no Files/{relative} in resources.pri and no {path}"); return unchecked((int)0x80070002); }
-            Ccw.Log($"XBF from {path}");
-            xbf = File.ReadAllBytes(path);
-        }
-
-        string xaml;
-        using (var stream = new MemoryStream(xbf))
-            xaml = XbfKit.XbfDecompiler.Decompile(stream, XbfKit.XbfDialect.WUX, new XbfKit.XbfDecompilationOptions { IncludeConnectionIds = true });
-        var doc = XDocument.Parse(xaml);
-        var top = doc.Root!;
+        var xbf = ReadXbf(relative);
+        if (xbf == null) return unchecked((int)0x80070002);
+        var top = Decompile(xbf).Root!;
         foreach (var a in top.Attributes().Where(a => !a.IsNamespaceDeclaration && a.Name != X + "Class"))
             Ccw.Log($"root attribute {a.Name.LocalName} skipped");
 
@@ -94,6 +82,93 @@ public static unsafe class XbfLoader
         Ccw.ComRelease(connector);
         return 0;
     }
+
+    /* the compiled XAML <relative> (Dir/Page.xbf) of the package: from resources.pri, else a loose file; null if none */
+    static byte[]? ReadXbf(string relative)
+    {
+        var root = Path.GetDirectoryName(Environment.ProcessPath) ?? ".";
+        if (FromPri(root, relative) is { } xbf) return xbf;
+        var path = Path.Combine(root, relative.Replace('/', '\\'));
+        if (!File.Exists(path)) { Ccw.Log($"no Files/{relative} in resources.pri and no {path}"); return null; }
+        Ccw.Log($"XBF from {path}");
+        return File.ReadAllBytes(path);
+    }
+
+    static XDocument Decompile(byte[] xbf)
+    {
+        using var stream = new MemoryStream(xbf);
+        return XDocument.Parse(XbfKit.XbfDecompiler.Decompile(stream, XbfKit.XbfDialect.WUX,
+                                                              new XbfKit.XbfDecompilationOptions { IncludeConnectionIds = true }));
+    }
+
+    /* Application.Resources of the package's App.xaml (App.xbf), which the framework loads after App is constructed and
+     * before OnLaunched. Whole if Uno's XamlReader takes it; otherwise entry by entry (merged dictionaries, theme
+     * dictionaries, keyed resources), each one that fails logged and left out. */
+    public static Mux.ResourceDictionary LoadApplicationResources()
+    {
+        var xbf = ReadXbf("App.xbf");
+        if (xbf == null) return new Mux.ResourceDictionary();
+        var top = Decompile(xbf).Root!;
+        /* XbfKit writes Application.Resources as the root's content (no property element); either form is taken */
+        var property = top.Elements().FirstOrDefault(e => e.Name.LocalName.EndsWith(".Resources", StringComparison.Ordinal));
+        var children = (property ?? top).Elements().Where(e => property != null || !e.Name.LocalName.Contains('.')).ToList();
+        if (children.Count == 0) { Ccw.Log("App.xaml has no Application.Resources"); return new Mux.ResourceDictionary(); }
+        foreach (var e in children.SelectMany(c => c.DescendantsAndSelf())) e.Attribute(X + "ConnectionId")?.Remove();
+
+        var dict = children.Count == 1 && children[0].Name.LocalName == "ResourceDictionary"
+            ? new XElement(children[0])
+            : new XElement(top.Name.Namespace + "ResourceDictionary", children.Select(c => new XElement(c)));
+        var namespaces = top.Attributes().Where(a => a.IsNamespaceDeclaration).ToList();
+        foreach (var ns in namespaces) dict.SetAttributeValue(ns.Name, ns.Value);
+        try
+        {
+            var whole = (Mux.ResourceDictionary)Mux.Markup.XamlReader.Load(dict.ToString());
+            Ccw.Log($"application resources: {whole.Count} entries, {whole.MergedDictionaries.Count} merged, {whole.ThemeDictionaries.Count} themes");
+            return whole;
+        }
+        catch (Exception e) { Ccw.Log($"application resources as a whole: {FirstLine(e)}; loading them one by one"); }
+
+        var result = new Mux.ResourceDictionary();
+        Mux.ResourceDictionary LoadDictionary(XElement element)
+        {
+            var copy = new XElement(element);
+            copy.Attribute(X + "Key")?.Remove();
+            foreach (var ns in namespaces) copy.SetAttributeValue(ns.Name, ns.Value);
+            if (copy.Name.LocalName != "ResourceDictionary")
+                copy = new XElement(dict.Name, namespaces.Select(a => new XAttribute(a)), new XElement(element));
+            return (Mux.ResourceDictionary)Mux.Markup.XamlReader.Load(copy.ToString());
+        }
+        void Try(string what, Action load)
+        {
+            try { load(); Ccw.Log($"application resource {what}: loaded"); }
+            catch (Exception e) { Ccw.Log($"application resource {what}: {FirstLine(e)}"); }
+        }
+        foreach (var child in dict.Elements())
+        {
+            var local = child.Name.LocalName;
+            if (local == "ResourceDictionary.MergedDictionaries")
+                foreach (var m in child.Elements())
+                    Try($"merged {m.Name.LocalName} {m.Attribute("Source")?.Value}", () => result.MergedDictionaries.Add(LoadDictionary(m)));
+            else if (local == "ResourceDictionary.ThemeDictionaries")
+                foreach (var t in child.Elements())
+                {
+                    var key = t.Attribute(X + "Key")?.Value ?? "";
+                    Try($"theme {key}", () => result.ThemeDictionaries[key] = LoadDictionary(t));
+                }
+            else
+            {
+                var key = child.Attribute(X + "Key")?.Value ?? child.Attribute("TargetType")?.Value ?? "";
+                Try($"{local} {key}", () =>
+                {
+                    foreach (var kv in LoadDictionary(child)) result[kv.Key] = kv.Value;
+                });
+            }
+        }
+        Ccw.Log($"application resources: {result.Count} entries, {result.MergedDictionaries.Count} merged, {result.ThemeDictionaries.Count} themes");
+        return result;
+    }
+
+    static string FirstLine(Exception e) => e.GetType().Name + ": " + e.Message.Split('\n')[0];
 
     /* the bytes of the resource Files/<relative> in <root>\resources.pri, or null */
     static byte[]? FromPri(string root, string relative)

@@ -135,6 +135,35 @@ public unsafe partial class UI_Xaml_Application
         }
     }
 
+    /* Application.Resources: on Windows the framework loads them from App.xaml after App is constructed and before
+     * OnLaunched, and reading them earlier (in App's constructor) fails with E_UNEXPECTED. They are a dictionary of
+     * their own, merged into the Uno host's resources so that the framework's lookups find them. */
+    Mux.ResourceDictionary? resources;
+
+    public void SetResources(Mux.ResourceDictionary? value)
+    {
+        var host = Mux.Application.Current.Resources.MergedDictionaries;
+        if (resources != null) host.Remove(resources);
+        resources = value;
+        if (value != null) host.Add(value);
+    }
+
+    int IUI_Xaml_IApplication_Abi.get_Resources(IntPtr* result)
+    {
+        *result = IntPtr.Zero;
+        if (resources == null) return unchecked((int)0x8000FFFF);
+        *result = Ccw.Get(Shim.For(resources), Iids.UI_Xaml_IResourceDictionary);
+        return 0;
+    }
+
+    int IUI_Xaml_IApplication_Abi.put_Resources(IntPtr value)
+    {
+        if (resources == null) return unchecked((int)0x8000FFFF);
+        if (Shim.UnoOf(value) is not Mux.ResourceDictionary d) return unchecked((int)0x80070057);
+        SetResources(d);
+        return 0;
+    }
+
     int IUI_Xaml_IApplication_Abi.Exit()
     {
         Ccw.Log("Application.Exit");
@@ -235,6 +264,8 @@ public unsafe partial class UI_Xaml_Application_Factory
         Ccw.Log($"initialization callback {hr:x8}");
         var app = UI_Xaml_Application.Current;
         if (app == null) { Ccw.Log("no Application was created"); return; }
+        try { app.SetResources(XbfLoader.LoadApplicationResources()); }
+        catch (Exception e) { Ccw.Log($"application resources failed: {e}"); app.SetResources(new Mux.ResourceDictionary()); }
         IntPtr a;
         if (FrameworkView.LaunchArgs == IntPtr.Zero ||
             Ccw.QueryInterface(FrameworkView.LaunchArgs, Iids.ApplicationModel_Activation_ILaunchActivatedEventArgs, out a) < 0)
