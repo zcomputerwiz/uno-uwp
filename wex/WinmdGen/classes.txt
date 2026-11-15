@@ -80,3 +80,5 @@ Windows.UI.Xaml.PropertyChangedCallback
 Windows.UI.Xaml.CreateDefaultValueCallback
 --delegate
 Windows.UI.Xaml.DependencyPropertyChangedCallback
+--class
+Windows.UI.Xaml.SizeHelper
