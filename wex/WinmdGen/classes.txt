@@ -86,3 +86,13 @@ Windows.UI.Xaml.SizeHelper
 Windows.UI.Xaml.ResourceDictionary
 --class
 Windows.UI.Xaml.Media.SolidColorBrush
+--class
+Windows.UI.Xaml.Controls.UserControl
+--class
+Windows.UI.Xaml.Controls.Control
+--class
+Windows.UI.Xaml.Controls.Primitives.ButtonBase
+--class
+Windows.UI.Xaml.Markup.MarkupExtension
+--interface
+Windows.UI.Xaml.Markup.IXamlMember

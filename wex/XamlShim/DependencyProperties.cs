@@ -49,6 +49,8 @@ static class NativeTypes
         return StandIn(name);
     }
 
+    public static Type? UnoType(string winrtName) => Known(winrtName);
+
     /* Windows.UI.Xaml.X is Uno's Microsoft.UI.Xaml.X; the Windows.Foundation and Windows.UI structs are Uno's own */
     static Type? Known(string name)
     {

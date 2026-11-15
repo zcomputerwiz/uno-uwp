@@ -65,11 +65,15 @@ public abstract class ShimFactory : ShimObject
         {
             var unoName = "Microsoft.UI.Xaml." + name[prefix.Length..];
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-                if (assembly.GetType(unoName) is { } t && !t.IsAbstract && t.GetConstructor(Type.EmptyTypes) != null)
+                if (!assembly.IsDynamic && assembly.GetType(unoName) is { } t)
                     return t;
             return null;
         });
-        return type != null ? Activator.CreateInstance(type) : null;
+        if (type == null) return null;
+        /* an application control's stand-in being constructed is the object its base class composes over (the base
+         * may have no public constructor, as Control has not) */
+        if (NativeControls.TakePending(type) is { } pending) return pending;
+        return !type.IsAbstract && type.GetConstructor(Type.EmptyTypes) != null ? Activator.CreateInstance(type) : null;
     }
 }
 

@@ -54,6 +54,7 @@ public static unsafe class XbfLoader
         if (content.Count > 1) Ccw.Log($"{content.Count} content elements: only the first is loaded");
         var element = new XElement(content[0]);
         foreach (var ns in top.Attributes().Where(a => a.IsNamespaceDeclaration)) element.SetAttributeValue(ns.Name, ns.Value);
+        NativeControls.Prepare(element);
         var built = (Mux.UIElement)Mux.Markup.XamlReader.Load(element.ToString());
 
         switch (shim.UnoObject)
@@ -94,7 +95,42 @@ public static unsafe class XbfLoader
         return File.ReadAllBytes(path);
     }
 
-    static XDocument Decompile(byte[] xbf)
+    /* every compiled XAML file of the package's resources.pri (first candidate of each), as decompiled documents */
+    public static IEnumerable<(string Name, XDocument Document)> AllXbf()
+    {
+        var root = Path.GetDirectoryName(Environment.ProcessPath) ?? ".";
+        var pri = Path.Combine(root, "resources.pri");
+        if (!File.Exists(pri)) yield break;
+        var found = new List<(string, byte[])>();
+        using (var stream = File.OpenRead(pri))
+        {
+            var file = PriFormat.PriFile.Parse(stream);
+            foreach (var map in file.Sections.OfType<PriFormat.ResourceMapSection>())
+                foreach (var set in map.CandidateSets.Values)
+                {
+                    var item = file.GetResourceMapItemByRef(set.ResourceMapItem);
+                    if (!item.FullName.Contains("\\Files\\", StringComparison.OrdinalIgnoreCase) ||
+                        !item.FullName.EndsWith(".xbf", StringComparison.OrdinalIgnoreCase)) continue;
+                    var candidate = set.Candidates.Count > 0 ? set.Candidates[0] : null;
+                    if (candidate == null || candidate.Type != PriFormat.ResourceValueType.EmbeddedData) continue;
+                    var span = candidate.Data ?? (candidate.DataItem is { } r ? file.GetDataItemByRef(r) : null);
+                    if (span is not { } s) continue;
+                    var bytes = new byte[s.Length];
+                    stream.Position = s.Offset;
+                    stream.ReadExactly(bytes);
+                    found.Add((item.FullName, bytes));
+                }
+        }
+        foreach (var (name, bytes) in found)
+        {
+            XDocument? doc = null;
+            try { doc = Decompile(bytes); }
+            catch (Exception e) { Ccw.Log($"XBF {name}: {FirstLine(e)}"); }
+            if (doc != null) yield return (name, doc);
+        }
+    }
+
+    internal static XDocument Decompile(byte[] xbf)
     {
         using var stream = new MemoryStream(xbf);
         return XDocument.Parse(XbfKit.XbfDecompiler.Decompile(stream, XbfKit.XbfDialect.WUX,
@@ -121,6 +157,7 @@ public static unsafe class XbfLoader
             : new XElement(top.Name.Namespace + "ResourceDictionary", children.Select(c => new XElement(c)));
         var namespaces = top.Attributes().Where(a => a.IsNamespaceDeclaration).ToList();
         foreach (var ns in namespaces) dict.SetAttributeValue(ns.Name, ns.Value);
+        NativeControls.Prepare(dict);
         try
         {
             var whole = (Mux.ResourceDictionary)Mux.Markup.XamlReader.Load(dict.ToString());

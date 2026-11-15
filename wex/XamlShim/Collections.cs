@@ -77,6 +77,21 @@ public static unsafe class Boxing
                 HString.Delete(h);
                 return s;
             }
+            case 20 when Ccw.QueryInterface(p, ReferenceTypeName, out var reference) >= 0:
+            {
+                /* a boxed TypeName (Control.DefaultStyleKey): the .NET type standing for it */
+                TypeName name;
+                int hr = ((delegate* unmanaged[Stdcall]<IntPtr, TypeName*, int>)(*(IntPtr**)reference)[6])(reference, &name);
+                Ccw.ComRelease(reference);
+                Marshal.ThrowExceptionForHR(hr);
+                var text = HString.Read(name.Name);
+                var comma = text.IndexOf(',');
+                var full = comma > 0 ? text[..comma].Trim() : text;
+                Type? result = name.Kind == 2 ? NativeControls.StandIn(full) : null;
+                result ??= NativeTypes.For(name);
+                HString.Delete(name.Name);
+                return result;
+            }
             default: throw new NotSupportedException($"property value of type {type}");
             }
         }
@@ -85,6 +100,10 @@ public static unsafe class Boxing
             Ccw.ComRelease(pv);
         }
     }
+
+    /* IReference<Windows.UI.Xaml.Interop.TypeName> */
+    static readonly Guid ReferenceTypeName = PInterface.Iid("pinterface({61c17706-2d65-11e0-9ae8-d48564015472};" +
+        "struct(Windows.UI.Xaml.Interop.TypeName;string;enum(Windows.UI.Xaml.Interop.TypeKind;i4)))");
 
     public static double? UnboxDouble(IntPtr p) => p == IntPtr.Zero ? null : Convert.ToDouble(Unbox(p), System.Globalization.CultureInfo.InvariantCulture);
 }
