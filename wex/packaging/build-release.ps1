@@ -91,9 +91,10 @@ $intro = if ($NotesFile -and (Test-Path $NotesFile) -and (Read-Text $NotesFile))
 Write-Text (Join-Path $OutDir 'notes.md') ((@(
     $intro,
     '',
-    "Source: folder ``wex/`` at commit $Commit. Licence: Apache License 2.0 (``LICENSE.txt``); third-party software and its",
-    'licences, including the .NET runtime, SkiaSharp, HarfBuzz and ICU: `NOTICE.txt`. WineExplorer setup shows',
-    '`TERMS.txt` before it downloads the component.',
+    "Source: folder ``wex/`` at commit $Commit.",
+    '',
+    'Licence: Apache License 2.0 (`LICENSE.txt`); third-party software and its licences, including the .NET runtime,',
+    'SkiaSharp, HarfBuzz and ICU: `NOTICE.txt`. WineExplorer setup shows `TERMS.txt` before it downloads the component.',
     ''
 ) + $table -join "`n") + "`n")
 "classes: $((Get-Content $list).Count), files: $((Get-ChildItem $dir -Recurse -File).Count)"
