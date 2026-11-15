@@ -29,8 +29,6 @@ public static unsafe class XbfLoader
         var xbf = ReadXbf(relative);
         if (xbf == null) return unchecked((int)0x80070002);
         var top = Decompile(xbf).Root!;
-        foreach (var a in top.Attributes().Where(a => !a.IsNamespaceDeclaration && a.Name != X + "Class"))
-            Ccw.Log($"root attribute {a.Name.LocalName} skipped");
 
         /* connection IDs: named elements keep their names, others get one */
         var connections = new List<(string Name, int Id)>();
@@ -57,6 +55,7 @@ public static unsafe class XbfLoader
             return 0;
         }
         if (content.Count > 1) Ccw.Log($"{content.Count} content elements: only the first is loaded");
+        ApplyRootAttributes(top, shim.UnoObject);
 
         /* the root's own resources (<Page.Resources>): the element's Resources, before its content is read, so that
          * the content's resources and the application's code (x:Bind converters) find them */
@@ -118,6 +117,36 @@ public static unsafe class XbfLoader
         if (bindings != IntPtr.Zero) Ccw.ComRelease(bindings);
         Ccw.ComRelease(connector);
         return 0;
+    }
+
+    /* the root element's own properties (<UserControl Height="32">): set on the component's Uno object, the text
+     * converted by Uno's XamlBindingHelper; {StaticResource X} and {ThemeResource X} from the resources; other
+     * markup extensions and attached properties are logged and left out */
+    static void ApplyRootAttributes(XElement top, object? target)
+    {
+        if (target == null) return;
+        foreach (var a in top.Attributes().Where(a => !a.IsNamespaceDeclaration && a.Name.Namespace == XNamespace.None))
+        {
+            var name = a.Name.LocalName;
+            var property = name.Contains('.') ? null :
+                target.GetType().GetProperty(name, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+            if (property == null || !property.CanWrite) { Ccw.Log($"root attribute {name}: left out"); continue; }
+            try
+            {
+                object? value;
+                var text = a.Value.Trim();
+                if (text.StartsWith('{'))
+                {
+                    var parts = text.Trim('{', '}').Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length != 2 || (parts[0] != "StaticResource" && parts[0] != "ThemeResource"))
+                    { Ccw.Log($"root attribute {name}={text}: left out"); continue; }
+                    value = Find((Mux.ResourceDictionary?)(target as Mux.FrameworkElement)?.Resources ?? new Mux.ResourceDictionary(), parts[1].Trim());
+                }
+                else value = Mux.Markup.XamlBindingHelper.ConvertValue(property.PropertyType, text);
+                property.SetValue(target, value);
+            }
+            catch (Exception e) { Ccw.Log($"root attribute {name}={a.Value}: {FirstLine(e)}"); }
+        }
     }
 
     /* the compiled XAML <relative> (Dir/Page.xbf) of the package: from resources.pri, else a loose file; null if none */

@@ -36,6 +36,7 @@ public static unsafe class Boxing
         /* the application's objects carried through Uno: the application's object itself */
         if (value is NativeObject o) { Ccw.ComAddRef(o.Pointer); return o.Pointer; }
         if (value is NativeCommand c) { Ccw.ComAddRef(c.Pointer); return c.Pointer; }
+        if (value is NativeList l) { Ccw.ComAddRef(l.Pointer); return l.Pointer; }
         /* a stand-in of an application object that is not an element (a converter): the application's object itself */
         if (value is NativeStandInObject && NativeControls.NativeOf(value) is var native && native != IntPtr.Zero)
         {
@@ -71,6 +72,7 @@ public static unsafe class Boxing
         {
             /* the application's own objects: a command as .NET's ICommand, anything else kept as it is */
             if (Ccw.QueryInterface(p, Iids.UI_Xaml_Input_ICommand, out var command) >= 0) return new NativeCommand(command);
+            if (NativeList.From(p) is { } list) return list;
             return new NativeObject(p);
         }
         try

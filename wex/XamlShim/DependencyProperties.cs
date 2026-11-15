@@ -90,10 +90,18 @@ static class NativeTypes
 sealed class NativeObject
 {
     public readonly IntPtr Pointer;
-    public NativeObject(IntPtr p) { Pointer = p; Ccw.ComAddRef(p); }
+    /* the object's identity (its IUnknown): the same object read twice (a list's item) is equal */
+    readonly IntPtr identity;
+    public NativeObject(IntPtr p)
+    {
+        Pointer = p;
+        Ccw.ComAddRef(p);
+        if (Ccw.QueryInterface(p, Ccw.IID_IUnknown, out var unknown) >= 0) { identity = unknown; Ccw.ComRelease(unknown); }
+        else identity = p;
+    }
     ~NativeObject() { Ccw.ComRelease(Pointer); }   /* COM objects of these applications are free-threaded or agile */
-    public override bool Equals(object? obj) => obj is NativeObject o && o.Pointer == Pointer;
-    public override int GetHashCode() => Pointer.GetHashCode();
+    public override bool Equals(object? obj) => obj is NativeObject o && o.identity == identity;
+    public override int GetHashCode() => identity.GetHashCode();
 }
 
 /* the IInspectable that stands for DependencyProperty.UnsetValue */
