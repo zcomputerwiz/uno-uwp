@@ -96,3 +96,17 @@ Windows.UI.Xaml.Controls.Primitives.ButtonBase
 Windows.UI.Xaml.Markup.MarkupExtension
 --interface
 Windows.UI.Xaml.Markup.IXamlMember
+--class
+Microsoft.UI.Xaml.Controls.NavigationView
+--class
+Microsoft.UI.Xaml.Controls.NavigationViewItem
+--class
+Microsoft.UI.Xaml.Controls.NavigationViewItemHeader
+--class
+Microsoft.UI.Xaml.Controls.NavigationViewItemSeparator
+--class
+Microsoft.UI.Xaml.Controls.NavigationViewItemInvokedEventArgs
+--class
+Microsoft.UI.Xaml.Controls.NavigationViewSelectionChangedEventArgs
+--class
+Windows.UI.Xaml.Controls.Primitives.Popup

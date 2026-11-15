@@ -72,7 +72,10 @@ EXTRA = [('Selawik 1.01 (https://github.com/microsoft/Selawik), fonts in Assets/
           '../../XamlShim/Themes/WinUI-LICENSE.txt'),
          ('Uno.icu-win 77.4.1 (https://github.com/unoplatform/uno.icu)', 'uno.icu-LICENSE.md'),
          ('ICU 77 (International Components for Unicode, in icuuc77.dll and icudt77.dll)', 'ICU-77-LICENSE.txt'),
-         ('Uno.Diagnostics.Eventing 2.0.1 (https://github.com/unoplatform/Uno.Diagnostics.Eventing)', 'Uno.Diagnostics.Eventing-License.md')]
+         ('Uno.Diagnostics.Eventing 2.0.1 (https://github.com/unoplatform/Uno.Diagnostics.Eventing)', 'Uno.Diagnostics.Eventing-License.md'),
+         ('Windows UI Library 2 interface definitions (https://github.com/microsoft/microsoft-ui-xaml, branch winui2/main, '
+          'commit ac1341314cc895c23cee47e941ca6ad387ef9907): XamlShim\'s WinUI 2 interfaces are generated from them',
+          'microsoft-ui-xaml-LICENSE.txt')]
 extra_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'extra-licenses')
 for title, name in EXTRA:
     lines.append('=' * 100)

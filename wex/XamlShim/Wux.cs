@@ -43,10 +43,16 @@ static class Shim
         {
             var name = t.FullName ?? "";
             if (!name.StartsWith(prefix, StringComparison.Ordinal) || t.IsGenericType) continue;
-            var shim = typeof(Shim).Assembly.GetType("XamlShim.Abi.UI_Xaml_" + name[prefix.Length..].Replace('.', '_'));
-            if (shim != null && typeof(ShimObject).IsAssignableFrom(shim) && !shim.IsAbstract &&
-                !typeof(ShimFactory).IsAssignableFrom(shim))
-                return shim;
+            /* Uno's classes are both Windows.UI.Xaml's and WinUI 2's (Microsoft.UI.Xaml.Controls.NavigationView):
+             * the WinUI 2 shim when there is one, the Windows.UI.Xaml one otherwise */
+            var rest = name[prefix.Length..].Replace('.', '_');
+            foreach (var candidate in new[] { "XamlShim.Abi.Microsoft_UI_Xaml_" + rest, "XamlShim.Abi.UI_Xaml_" + rest })
+            {
+                var shim = typeof(Shim).Assembly.GetType(candidate);
+                if (shim != null && typeof(ShimObject).IsAssignableFrom(shim) && !shim.IsAbstract &&
+                    !typeof(ShimFactory).IsAssignableFrom(shim))
+                    return shim;
+            }
         }
         return null;
     });

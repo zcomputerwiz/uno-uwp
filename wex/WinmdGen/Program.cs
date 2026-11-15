@@ -12,7 +12,7 @@
 // Delegates named with --delegate get a caller only (Invoke at slot 3). Structs and enums used in signatures are
 // emitted as blittable structs and their underlying integer types.
 //
-// usage: WinmdGen <Windows.winmd> <out.cs> <namespace> [--class Name]... [--interface Name]... [--delegate Name]...
+// usage: WinmdGen <Windows.winmd[;more.winmd]> <out.cs> <namespace> [--class Name]... [--interface Name]... [--delegate Name]...
 
 using System.Collections.Immutable;
 using System.Reflection.Metadata;
@@ -38,8 +38,10 @@ return 0;
 
 sealed class Generator
 {
-    readonly MetadataReader md;
-    readonly Dictionary<string, TypeDefinitionHandle> types = new();
+    /* the metadata file of the type being processed: every type is read from its own file (Windows.winmd, WinUI 2's
+     * Microsoft.UI.Xaml.winmd), handles are only meaningful there */
+    MetadataReader md;
+    readonly Dictionary<string, (MetadataReader R, TypeDefinitionHandle H)> types = new();
     readonly SortedDictionary<string, TypeDefinitionHandle> interfaces = new(StringComparer.Ordinal);
     readonly SortedDictionary<string, TypeDefinitionHandle> delegates = new(StringComparer.Ordinal);
     readonly SortedDictionary<string, TypeDefinitionHandle> structs = new(StringComparer.Ordinal);
@@ -60,21 +62,39 @@ sealed class Generator
         public bool Activatable;                     // default constructor (IActivationFactory.ActivateInstance)
     }
 
-    public Generator(string path)
+    /* paths: one or more metadata files, separated by ';' (a type defined in two files is taken from the first) */
+    public Generator(string paths)
     {
-        var pe = new PEReader(File.OpenRead(path));
-        md = pe.GetMetadataReader();
-        foreach (var h in md.TypeDefinitions)
+        md = null!;
+        foreach (var path in paths.Split(';', StringSplitOptions.RemoveEmptyEntries))
         {
-            var t = md.GetTypeDefinition(h);
-            types[md.GetString(t.Namespace) + "." + md.GetString(t.Name)] = h;
+            var reader = new PEReader(File.OpenRead(path)).GetMetadataReader();
+            md ??= reader;
+            foreach (var h in reader.TypeDefinitions)
+            {
+                var t = reader.GetTypeDefinition(h);
+                types.TryAdd(reader.GetString(t.Namespace) + "." + reader.GetString(t.Name), (reader, h));
+            }
         }
     }
 
     TypeDefinitionHandle Find(string name) =>
-        types.TryGetValue(name, out var h) ? h : throw new InvalidOperationException($"type {name} not found");
+        types.TryGetValue(name, out var t) ? t.H : throw new InvalidOperationException($"type {name} not found");
 
-    string FullName(EntityHandle h)
+    /* run with the metadata file of a type current */
+    T In<T>(string name, Func<T> f)
+    {
+        var saved = md;
+        if (types.TryGetValue(name, out var t)) md = t.R;
+        try { return f(); }
+        finally { md = saved; }
+    }
+
+    void In(string name, Action f) => In<object?>(name, () => { f(); return null; });
+
+    string FullName(EntityHandle h) => FullName(md, h);
+
+    static string FullName(MetadataReader md, EntityHandle h)
     {
         switch (h.Kind)
         {
@@ -98,6 +118,11 @@ sealed class Generator
     public void AddClass(string name)
     {
         if (classes.ContainsKey(name)) return;
+        In(name, () => AddClassIn(name));
+    }
+
+    void AddClassIn(string name)
+    {
         var info = new ClassInfo();
         classes[name] = info;
         var h = Find(name);
@@ -146,32 +171,41 @@ sealed class Generator
     {
         if (!into.Contains(name)) into.Add(name);
         AddInterface(name);
-        foreach (var ih in md.GetTypeDefinition(Find(name)).GetInterfaceImplementations())
+        In(name, () =>
         {
-            var iname = FullName(md.GetInterfaceImplementation(ih).Interface);
-            if (iname != "<generic>") AddInterfaceTree(iname, into);
-        }
+            foreach (var ih in md.GetTypeDefinition(Find(name)).GetInterfaceImplementations())
+            {
+                var iname = FullName(md.GetInterfaceImplementation(ih).Interface);
+                if (iname != "<generic>") AddInterfaceTree(iname, into);
+            }
+        });
     }
 
     public void AddInterface(string name)
     {
         if (interfaces.ContainsKey(name)) return;
-        var h = Find(name);
-        if (!IsInterface(h)) throw new InvalidOperationException($"{name} is not an interface");
-        interfaces[name] = h;
-        foreach (var mh in md.GetTypeDefinition(h).GetMethods()) CollectTypes(md.GetMethodDefinition(mh));
+        In(name, () =>
+        {
+            var h = Find(name);
+            if (!IsInterface(h)) throw new InvalidOperationException($"{name} is not an interface");
+            interfaces[name] = h;
+            foreach (var mh in md.GetTypeDefinition(h).GetMethods()) CollectTypes(md.GetMethodDefinition(mh));
+        });
     }
 
     public void AddDelegate(string name)
     {
         if (delegates.ContainsKey(name)) return;
-        var h = Find(name);
-        delegates[name] = h;
-        foreach (var mh in md.GetTypeDefinition(h).GetMethods())
+        In(name, () =>
         {
-            var m = md.GetMethodDefinition(mh);
-            if (md.GetString(m.Name) == "Invoke") CollectTypes(m);
-        }
+            var h = Find(name);
+            delegates[name] = h;
+            foreach (var mh in md.GetTypeDefinition(h).GetMethods())
+            {
+                var m = md.GetMethodDefinition(mh);
+                if (md.GetString(m.Name) == "Invoke") CollectTypes(m);
+            }
+        });
     }
 
     void CollectTypes(MethodDefinition m)
@@ -183,13 +217,16 @@ sealed class Generator
     void NoteStruct(AbiType t)
     {
         if (t.Struct == null || structs.ContainsKey(t.Struct)) return;
-        var h = Find(t.Struct);
-        structs[t.Struct] = h;
-        foreach (var fh in md.GetTypeDefinition(h).GetFields())
+        In(t.Struct, () =>
         {
-            var f = md.GetFieldDefinition(fh);
-            NoteStruct(f.DecodeSignature(new SigProvider(this), null));
-        }
+            var h = Find(t.Struct);
+            structs[t.Struct] = h;
+            foreach (var fh in md.GetTypeDefinition(h).GetFields())
+            {
+                var f = md.GetFieldDefinition(fh);
+                NoteStruct(f.DecodeSignature(new SigProvider(this), null));
+            }
+        });
     }
 
     /* the System.Type first argument of an attribute constructor (a serialized type name), or null */
@@ -261,8 +298,8 @@ sealed class Generator
         }) with { Kind = c switch { PrimitiveTypeCode.Void => "void", PrimitiveTypeCode.Boolean => "bool",
                                     PrimitiveTypeCode.String => "string", PrimitiveTypeCode.Object => "object",
                                     PrimitiveTypeCode.Char => "other", _ => "prim" } };
-        public AbiType GetTypeFromDefinition(MetadataReader r, TypeDefinitionHandle h, byte kind) => Named(g.FullName(h), kind);
-        public AbiType GetTypeFromReference(MetadataReader r, TypeReferenceHandle h, byte kind) => Named(g.FullName(h), kind);
+        public AbiType GetTypeFromDefinition(MetadataReader r, TypeDefinitionHandle h, byte kind) => Named(FullName(r, h), kind);
+        public AbiType GetTypeFromReference(MetadataReader r, TypeReferenceHandle h, byte kind) => Named(FullName(r, h), kind);
         AbiType Named(string name, byte kind)
         {
             /* the union metadata names some Windows.Foundation types by their .NET projections */
@@ -277,15 +314,15 @@ sealed class Generator
             }
             if (name.StartsWith("System.Numerics.")) return new(name) { Kind = "other" };        /* Windows.Foundation.Numerics */
             if (kind != (byte)SignatureTypeKind.ValueType) return new("IntPtr") { Kind = "object" };
-            if (!g.types.TryGetValue(name, out var h)) return new("IntPtr") { Kind = "other" };
-            var def = g.md.GetTypeDefinition(h);
+            if (!g.types.TryGetValue(name, out var t)) return new("IntPtr") { Kind = "other" };
+            var def = t.R.GetTypeDefinition(t.H);
             if (def.BaseType.IsNil) return new("IntPtr") { Kind = "other" };
-            if (g.FullName(def.BaseType) == "System.Enum")
+            if (FullName(t.R, def.BaseType) == "System.Enum")
             {
                 foreach (var fh in def.GetFields())
                 {
-                    var f = g.md.GetFieldDefinition(fh);
-                    if (g.md.GetString(f.Name) == "value__") return f.DecodeSignature(this, null) with { Kind = "enum" };
+                    var f = t.R.GetFieldDefinition(fh);
+                    if (t.R.GetString(f.Name) == "value__") return f.DecodeSignature(this, null) with { Kind = "enum" };
                 }
                 return new("int") { Kind = "enum" };
             }
@@ -372,34 +409,35 @@ sealed class Generator
         var s = new StringBuilder();
         s.AppendLine("// SPDX-License-Identifier: Apache-2.0");
         s.AppendLine("// Copyright 2026 WineExplorer contributors");
-        s.AppendLine("// <auto-generated> by WinmdGen from Windows.winmd: do not edit </auto-generated>");
+        s.AppendLine("// <auto-generated> by WinmdGen from Windows.winmd and WinUI 2's metadata: do not edit </auto-generated>");
         s.AppendLine("#pragma warning disable CS8981, CS0649, CS1591");
         s.AppendLine("using System.Runtime.CompilerServices;");
         s.AppendLine("using System.Runtime.InteropServices;");
         s.AppendLine($"namespace {ns};");
         s.AppendLine();
         foreach (var (name, h) in structs)
-        {
-            s.AppendLine($"[StructLayout(LayoutKind.Sequential)] public struct {Ident(name)}");
-            s.AppendLine("{");
-            foreach (var fh in md.GetTypeDefinition(h).GetFields())
+            In(name, () =>
             {
-                var f = md.GetFieldDefinition(fh);
-                s.AppendLine($"    public {f.DecodeSignature(new SigProvider(this), null).Cs} {md.GetString(f.Name)};");
-            }
-            s.AppendLine("}");
-        }
+                s.AppendLine($"[StructLayout(LayoutKind.Sequential)] public struct {Ident(name)}");
+                s.AppendLine("{");
+                foreach (var fh in md.GetTypeDefinition(h).GetFields())
+                {
+                    var f = md.GetFieldDefinition(fh);
+                    s.AppendLine($"    public {f.DecodeSignature(new SigProvider(this), null).Cs} {md.GetString(f.Name)};");
+                }
+                s.AppendLine("}");
+            });
         s.AppendLine();
         s.AppendLine("public static class Iids");
         s.AppendLine("{");
         foreach (var (name, h) in interfaces)
-            s.AppendLine($"    public static readonly Guid {Ident(name)} = new(\"{InterfaceGuid(h)}\");");
+            s.AppendLine($"    public static readonly Guid {Ident(name)} = new(\"{In(name, () => InterfaceGuid(h))}\");");
         foreach (var (name, h) in delegates)
-            s.AppendLine($"    public static readonly Guid {Ident(name)} = new(\"{InterfaceGuid(h)}\");");
+            s.AppendLine($"    public static readonly Guid {Ident(name)} = new(\"{In(name, () => InterfaceGuid(h))}\");");
         s.AppendLine("}");
         s.AppendLine();
-        foreach (var (name, h) in interfaces) EmitInterface(s, name, h);
-        foreach (var (name, h) in delegates) EmitDelegate(s, name, h);
+        foreach (var (name, h) in interfaces) In(name, () => EmitInterface(s, name, h));
+        foreach (var (name, h) in delegates) In(name, () => EmitDelegate(s, name, h));
         EmitClassTable(s);
         return s.ToString();
     }

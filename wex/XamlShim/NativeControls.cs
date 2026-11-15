@@ -63,9 +63,13 @@ public static unsafe partial class NativeControls
             set.Add(member);
         }
         int files = 0;
-        foreach (var (_, doc) in XbfLoader.AllXbf())
+        var dump = Ccw.Calls ? Path.Combine(Path.GetTempPath(), "xamlshim-xaml") : null;
+        if (dump != null) Directory.CreateDirectory(dump);
+        foreach (var (name, doc) in XbfLoader.AllXbf())
         {
             files++;
+            if (dump != null)
+                File.WriteAllText(Path.Combine(dump, name.Replace('\\', '_').Trim('_') + ".xaml"), doc.ToString());
             foreach (var e in doc.Root!.DescendantsAndSelf())
             {
                 if (ApplicationType(e.Name.Namespace, e.Name.LocalName) is { } type)
