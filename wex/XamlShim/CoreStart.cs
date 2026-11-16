@@ -457,11 +457,79 @@ public static unsafe class CoreWindowHost
     static IntPtr childProc;
     const uint WM_WINDOWPOSCHANGING = 0x0046;
 
+    [DllImport("user32.dll")] static extern IntPtr SendMessageW(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
+
+    /* Keyboard input goes to the focused window, Uno's, but an application's shortcuts are CoreWindow.KeyDown,
+     * KeyUp and CharacterReceived (the Calculator's keys). Key messages are sent to the CoreWindow first, which raises
+     * them (Wine's windows.ui); an application that marks the event handled keeps it from Uno's tree, as on Windows. */
+    static bool keyHandled, keyHooked;
+
+    static void HookKeyEvents()
+    {
+        if (keyHooked || FrameworkView.CoreWindow == IntPtr.Zero) return;
+        keyHooked = true;
+        /* added after the application's own handlers (it added them when it started), so that they have run */
+        var keyHandler = new Guid("a3ec0774-55ac-5d61-8232-b35c5d35c93c");         /* TypedEventHandler<CoreWindow, KeyEventArgs> */
+        var characterHandler = new Guid("73f846a8-0af6-5872-8fb8-ae2f56d8553e");   /* ... <CoreWindow, CharacterReceivedEventArgs> */
+        for (int which = 0; which < 3; which++)
+        {
+            var index = which;
+            var iid = which == 2 ? characterHandler : keyHandler;
+            var observer = new NativeDelegate(iid, (_, args) =>
+            {
+                if (args == IntPtr.Zero || Ccw.QueryInterface(args, Iids.UI_Core_ICoreWindowEventArgs, out var e) < 0) return;
+                byte handled;
+                if (UI_Core_ICoreWindowEventArgs_Call.get_Handled(e, &handled) >= 0 && handled != 0) keyHandled = true;
+                if (Ccw.Tracing) Ccw.Log($"CoreWindow key event {index}: handled {handled}");
+                Ccw.ComRelease(e);
+            });
+            var r = Ccw.Get(observer, iid);
+            long token;
+            _ = which switch
+            {
+                0 => UI_Core_ICoreWindow_Call.add_KeyDown(FrameworkView.CoreWindow, r, &token),
+                1 => UI_Core_ICoreWindow_Call.add_KeyUp(FrameworkView.CoreWindow, r, &token),
+                _ => UI_Core_ICoreWindow_Call.add_CharacterReceived(FrameworkView.CoreWindow, r, &token),
+            };
+            Ccw.ComRelease(r);
+        }
+    }
+
+    static bool IsKeyMessage(uint msg) => msg is 0x0100 or 0x0101 or 0x0104 or 0x0105;   /* WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP */
+    static int pendingCharacters;
+    [DllImport("user32.dll")] static extern int PeekMessageW(byte* msg, IntPtr hwnd, uint min, uint max, uint remove);   /* WM_KEYDOWN..WM_CHAR, WM_SYSKEYDOWN..WM_SYSCHAR */
+
     /* Uno's window keeps its own idea of where it is (its position as a top-level window, taken as a position in the
      * CoreWindow): every move or resize it asks for is made the whole client area of the CoreWindow */
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
     static IntPtr ChildProc(IntPtr hwnd, uint msg, IntPtr w, IntPtr l)
     {
+        if (IsKeyMessage(msg) && FrameworkView.CoreHwnd != IntPtr.Zero)
+        {
+            HookKeyEvents();
+            keyHandled = false;
+            SendMessageW(FrameworkView.CoreHwnd, msg, w, l);
+            if (Ccw.Tracing) Ccw.Log($"key message {msg:x} {(long)w:x} sent to the CoreWindow: handled {keyHandled}");
+            if (keyHandled) return IntPtr.Zero;
+            if (msg is 0x0100 or 0x0104)
+            {
+                /* TranslateMessage has posted the character of this key before the key message was dispatched; Uno takes
+                 * it from the queue itself, so the CoreWindow gets it now (CharacterReceived: the Calculator's digits) */
+                var m = stackalloc byte[48];
+                if (PeekMessageW(m, hwnd, 0x0102, 0x0102, 0) != 0)
+                {
+                    pendingCharacters++;
+                    SendMessageW(FrameworkView.CoreHwnd, 0x0102, *(IntPtr*)(m + 16), *(IntPtr*)(m + 24));
+                    if (Ccw.Tracing) Ccw.Log($"character {(long)*(IntPtr*)(m + 16):x} sent to the CoreWindow");
+                }
+            }
+        }
+        else if (msg is 0x0102 or 0x0106 && FrameworkView.CoreHwnd != IntPtr.Zero)
+        {
+            /* a character that reached this window: the CoreWindow's, unless it was sent with its key */
+            if (pendingCharacters > 0) pendingCharacters--;
+            else SendMessageW(FrameworkView.CoreHwnd, msg, w, l);
+        }
         if (msg == WM_WINDOWPOSCHANGING && l != IntPtr.Zero)
         {
             /* WINDOWPOS: hwnd, hwndInsertAfter, x, y, cx, cy, flags */

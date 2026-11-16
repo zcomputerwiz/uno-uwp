@@ -265,6 +265,30 @@ public static unsafe partial class NativeControls
                 property.SetGetMethod(get);
             }
 
+            /* the attached ones: static Get<Name>(DependencyObject) and Set<Name>(DependencyObject, object) */
+            foreach (var member in members)
+            {
+                if (!IsAttachable(fullName, member)) continue;
+                var set = builder.DefineMethod("Set" + member, MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
+                                               null, [typeof(Microsoft.UI.Xaml.DependencyObject), typeof(object)]);
+                var s = set.GetILGenerator();
+                s.Emit(OpCodes.Ldstr, fullName);
+                s.Emit(OpCodes.Ldstr, member);
+                s.Emit(OpCodes.Ldarg_0);
+                s.Emit(OpCodes.Ldarg_1);
+                s.Emit(OpCodes.Call, setAttached);
+                s.Emit(OpCodes.Ret);
+                var get = builder.DefineMethod("Get" + member, MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
+                                               typeof(object), [typeof(Microsoft.UI.Xaml.DependencyObject)]);
+                var g = get.GetILGenerator();
+                g.Emit(OpCodes.Ldstr, fullName);
+                g.Emit(OpCodes.Ldstr, member);
+                g.Emit(OpCodes.Ldarg_0);
+                g.Emit(OpCodes.Call, getAttached);
+                g.Emit(OpCodes.Ret);
+                Ccw.Log($"native type {fullName}: attached {member}");
+            }
+
             /* Uno's reader takes the content property from ContentPropertyAttribute on the type or a base */
             var contentAttribute = typeof(Microsoft.UI.Xaml.Markup.ContentPropertyAttribute);
             var nameField = contentAttribute.GetField(nameof(Microsoft.UI.Xaml.Markup.ContentPropertyAttribute.Name))!;
@@ -338,6 +362,34 @@ public static unsafe partial class NativeControls
             return type;
         }
     }
+
+    /* the attached properties of an application type: Uno's reader takes a member as attached when its type has a static
+     * Set<Name> (or a static property <Name>); these are the type's, for the members its XAML metadata says are attachable */
+    public static void SetAttached(string type, string member, object target, object? value)
+    {
+        if (FindProperty(type, member) is not { } dp || target is not Microsoft.UI.Xaml.DependencyObject d)
+        { Ccw.Log($"set attached {type}.{member}: no dependency property or target"); return; }
+        if (Ccw.Calls) Ccw.Log($"set attached {type}.{member} on {d.GetType().Name} {(d as Microsoft.UI.Xaml.FrameworkElement)?.Name} = {value} ({value?.GetType().Name})");
+        d.SetValue(dp, value);
+    }
+
+    public static object? GetAttached(string type, string member, object target) =>
+        FindProperty(type, member) is { } dp && target is Microsoft.UI.Xaml.DependencyObject d ? d.GetValue(dp) : null;
+
+    static bool IsAttachable(string type, string member)
+    {
+        var m = XamlMember(type, member);
+        if (m == IntPtr.Zero) return false;
+        try
+        {
+            byte attachable;
+            return UI_Xaml_Markup_IXamlMember_Call.get_IsAttachable(m, &attachable) >= 0 && attachable != 0;
+        }
+        finally { Ccw.ComRelease(m); }
+    }
+
+    static readonly MethodInfo setAttached = typeof(NativeControls).GetMethod(nameof(SetAttached))!;
+    static readonly MethodInfo getAttached = typeof(NativeControls).GetMethod(nameof(GetAttached))!;
 
     static IntPtr Native(object self) => natives.TryGetValue(self, out var n) ? n.Pointer : IntPtr.Zero;
 

@@ -151,6 +151,8 @@ Windows.UI.Xaml.Markup.IComponentConnector2
 --interface
 Windows.UI.Xaml.Data.IValueConverter
 --interface
+Windows.UI.Core.ICoreWindowEventArgs
+--interface
 Windows.UI.Xaml.Data.ICustomPropertyProvider
 --interface
 Windows.UI.Xaml.Data.ICustomProperty

@@ -131,6 +131,9 @@ public static unsafe class Boxing
                 HString.Delete(name.Name);
                 return result;
             }
+            /* any other IReference<T> (a boxed enum or structure of the application, MyVirtualKey): kept as it is, as the
+             * application's object, and given back to it as it was */
+            case 20: return new NativeObject(p);
             default: throw new NotSupportedException($"property value of type {type}");
             }
         }
