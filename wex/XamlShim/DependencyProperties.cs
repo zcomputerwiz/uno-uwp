@@ -255,6 +255,13 @@ public unsafe partial class UI_Xaml_PropertyMetadata_Factory
         Make(IntPtr.Zero, changed, create, IntPtr.Zero, null, result);
 }
 
+/* new FontFamily(name): Uno's FontFamily of that name (composable) */
+public unsafe partial class UI_Xaml_Media_FontFamily_Factory
+{
+    int IUI_Xaml_Media_IFontFamilyFactory_Abi.CreateInstanceWithName(IntPtr familyName, IntPtr outer, IntPtr* inner, IntPtr* result) =>
+        Shim.Compose(new UI_Xaml_Media_FontFamily { UnoObject = new Mux.Media.FontFamily(HString.Read(familyName)) }, outer, inner, result);
+}
+
 /* new PropertyPath(path): Uno's PropertyPath of that path */
 public unsafe partial class UI_Xaml_PropertyPath_Factory
 {

@@ -108,6 +108,66 @@ public static class Reflect
         method.Invoke(null, [target, value]);
     }
 
+    /* a method through the ABI (generated default bodies): the Uno class's static method of that name and parameter count
+     * for a statics interface, the Uno object's method otherwise; the arguments converted to its parameter types */
+    public static object? Call(object shim, string name, object?[] args)
+    {
+        object? target = null;
+        Type? type;
+        BindingFlags flags = BindingFlags.Public | BindingFlags.FlattenHierarchy;
+        if (shim is ShimFactory factory)
+        {
+            type = ShimFactory.UnoTypeOf(factory.ClassName);
+            flags |= BindingFlags.Static;
+        }
+        else
+        {
+            target = ((ShimObject)shim).UnoObject;
+            type = target?.GetType();
+            flags |= BindingFlags.Instance;
+        }
+        var candidates = type?.GetMethods(flags).Where(m => m.Name == name && m.GetParameters().Length == args.Length).ToList() ?? [];
+        var method = candidates.FirstOrDefault(m => m.GetParameters().Zip(args).All(p => p.Second == null || Accepts(p.First.ParameterType, p.Second)))
+                     ?? candidates.FirstOrDefault();
+        /* a factory's CreateInstance... (not composable): Uno's constructor with those parameters */
+        if (method == null && shim is ShimFactory && name.StartsWith("CreateInstance", StringComparison.Ordinal) && type != null)
+        {
+            var ctor = type.GetConstructors().FirstOrDefault(c => c.GetParameters().Length == args.Length);
+            if (ctor != null)
+            {
+                var cps = ctor.GetParameters();
+                return ctor.Invoke(args.Select((a, i) => ConvertArgument(a, cps[i].ParameterType)).ToArray());
+            }
+        }
+        if (method == null)
+        {
+            Ccw.NotImplemented($"{(shim as ShimFactory)?.ClassName ?? ((ShimObject)shim).RuntimeClassName}.{name} (no Uno method)");
+            throw new NotImplementedException();
+        }
+        var parameters = method.GetParameters();
+        var converted = new object?[args.Length];
+        for (int i = 0; i < args.Length; i++) converted[i] = ConvertArgument(args[i], parameters[i].ParameterType);
+        if (Ccw.Calls) Ccw.Log($"Reflect.Call {method.DeclaringType?.Name}.{name}");
+        return method.Invoke(target, converted);
+    }
+
+    static bool Accepts(Type parameter, object value)
+    {
+        var t = Nullable.GetUnderlyingType(parameter) ?? parameter;
+        return t.IsInstanceOfType(value) || (t.IsEnum && value is long) || (t.IsPrimitive && value.GetType().IsPrimitive) ||
+               (t.IsValueType && !t.IsPrimitive && value.GetType().IsValueType && !value.GetType().IsPrimitive);
+    }
+
+    static object? ConvertArgument(object? value, Type parameter)
+    {
+        var t = Nullable.GetUnderlyingType(parameter) ?? parameter;
+        if (value == null || t.IsInstanceOfType(value)) return value;
+        if (t.IsEnum) return Enum.ToObject(t, Convert.ToInt64(value, CultureInfo.InvariantCulture));
+        if (t.IsValueType && !t.IsPrimitive && value.GetType().IsValueType && !value.GetType().IsPrimitive) return StructConvert.ToUno(value, t);
+        if (t == typeof(object)) return value;
+        return Convert.ChangeType(value, t, CultureInfo.InvariantCulture);
+    }
+
     public static long GetInteger(object shim, string name) => Convert.ToInt64(Get(shim, name), CultureInfo.InvariantCulture);
 
     /* struct properties: the ABI struct and Uno's struct of the same shape, member by member (StructConvert) */

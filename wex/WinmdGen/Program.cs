@@ -458,7 +458,7 @@ sealed class Generator
                              ps[1].Name == "@innerInterface" && ps[2].Name == "result";
             var body = composable
                 ? "=> ShimFactory.ComposeDefault(this, @baseInterface, @innerInterface, result);"
-                : PropertyBody(mname, ps) ?? EventBody(mname, ps) ?? AttachedBody(mname, ps) ??
+                : PropertyBody(mname, ps) ?? EventBody(mname, ps) ?? AttachedBody(mname, ps) ?? MethodBody(mname, ps) ??
                   $"{{ Ccw.NotImplemented(\"{name}.{mname}\"); return unchecked((int)0x80004001); }}";
             s.AppendLine($"    int {mname}({string.Join(", ", ps.Select(p => p.Decl))}) {body}");
         }
@@ -570,6 +570,45 @@ sealed class Generator
             return value == null ? null : $"{{ Reflect.SetAttached(this, \"{prop}\", {ps[0].Name}, {value}); return 0; }}";
         }
         return null;
+    }
+
+    /* a default body for any other method: the Uno method of the same name and parameter count (Reflect.Call, XamlShim):
+     * a static method for a statics interface, the Uno object's method otherwise. Methods with out, by-ref or array
+     * parameters and asynchronous ones (Uno's .NET tasks are not WinRT async operations) keep no body. */
+    static string? MethodBody(string mname, List<(string Decl, string Name, AbiType? Type)> ps)
+    {
+        if (mname.EndsWith("Async", StringComparison.Ordinal) || ps.Any(p => p.Type == null)) return null;
+        var hasResult = ps.Count > 0 && ps[^1].Name == "result";
+        var inputs = hasResult ? ps.Take(ps.Count - 1).ToList() : ps;
+        var args = new List<string>();
+        foreach (var p in inputs)
+        {
+            var arg = p.Type!.Kind switch
+            {
+                "string" => $"HString.Read({p.Name})",
+                "bool" => $"{p.Name} != 0",
+                "prim" => $"(object){p.Name}",
+                "enum" => $"(long){p.Name}",
+                "object" => $"Boxing.Unbox({p.Name})",
+                "struct" => $"(object){p.Name}",
+                _ => null,
+            };
+            if (arg == null) return null;
+            args.Add(arg);
+        }
+        var call = $"Reflect.Call(this, \"{mname}\", new object?[] {{ {string.Join(", ", args)} }})";
+        if (!hasResult) return $"{{ {call}; return 0; }}";
+        var t = ps[^1].Type!;
+        return t.Kind switch
+        {
+            "string" => $"{{ *result = HString.Create((string?){call} ?? \"\"); return 0; }}",
+            "bool" => $"{{ *result = (byte)({call} is true ? 1 : 0); return 0; }}",
+            "prim" => $"{{ *result = ({t.Cs})System.Convert.ChangeType({call}!, typeof({t.Cs}), System.Globalization.CultureInfo.InvariantCulture); return 0; }}",
+            "enum" => $"{{ *result = unchecked(({t.Cs})System.Convert.ToInt64({call}, System.Globalization.CultureInfo.InvariantCulture)); return 0; }}",
+            "object" => $"{{ *result = Boxing.Box({call}); return 0; }}",
+            "struct" => $"{{ *result = {call} is {{ }} v__ ? ({t.Cs})StructConvert.ToAbi(v__, typeof({t.Cs})) : default; return 0; }}",
+            _ => null,
+        };
     }
 
     /* a default body for an event accessor: the Uno object's event of the same name (Events, XamlShim) */
