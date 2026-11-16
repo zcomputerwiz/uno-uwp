@@ -40,6 +40,8 @@ public static unsafe partial class XbfLoader
             var n = e.Attribute(X + "Name")?.Value;
             if (n == null) { n = "__connection" + id.Value; e.SetAttributeValue(X + "Name", n); }
             connections.Add((n, int.Parse(id.Value, System.Globalization.CultureInfo.InvariantCulture)));
+            /* the file, so that an element a template builds later (outside this load) finds its component */
+            e.SetAttributeValue(shimNamespace + "XamlConnection.Host", relative);
             e.SetAttributeValue(shimNamespace + "XamlConnection.Id", id.Value);
             id.Remove();
         }
@@ -95,6 +97,7 @@ public static unsafe partial class XbfLoader
         }
 
         if (connections.Count == 0 && rootConnection == null) return 0;
+        XamlConnection.Register(relative, component);
         if (Ccw.QueryInterface(component, Iids.UI_Xaml_Markup_IComponentConnector, out var connector) < 0)
         {
             Ccw.Log("the component has no IComponentConnector");
@@ -523,7 +526,7 @@ public static unsafe partial class XbfLoader
      * the base is looked up in the style's dictionary, the root dictionary, the application's and then the framework's. */
     static void FixBasedOn(XElement dictXml, Mux.ResourceDictionary dict, Mux.ResourceDictionary root, string what)
     {
-        int byReader = 0, filled = 0;
+        int byReader = 0, filled = 0, resourceRefs = 0;
         var missing = new List<string>();
         void Fix(XElement xml, Mux.ResourceDictionary d)
         {
@@ -558,12 +561,27 @@ public static unsafe partial class XbfLoader
                     if (found is Mux.Style b && !style.IsSealed) { style.BasedOn = b; filled++; }
                     else missing.Add(key);
                 }
+                else if (e.Attribute(X + "Key")?.Value is { } objectKey && d.TryGetValue(objectKey, out var resource) && resource != null)
+                {
+                    /* an object of the resources with {StaticResource Key} attributes (the application's template selectors):
+                     * the reader leaves them null as it does BasedOn, so they are set from the dictionaries once it is built */
+                    foreach (var a in e.Attributes().Where(a => !a.IsNamespaceDeclaration && a.Name.Namespace == XNamespace.None))
+                    {
+                        var refKey = MarkupKey(a.Value);
+                        var property = refKey == null ? null : resource.GetType().GetProperty(a.Name.LocalName, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                        if (refKey == null || property == null || !property.CanWrite || !property.CanRead || property.GetValue(resource) != null) continue;
+                        var target = (d.TryGetValue(refKey, out var v) ? v : null) ?? (root.TryGetValue(refKey, out v) ? v : null) ??
+                                     (Mux.Application.Current?.Resources is { } app && app.TryGetValue(refKey, out v) ? v : null);
+                        if (target != null && property.PropertyType.IsInstanceOfType(target)) { property.SetValue(resource, target); resourceRefs++; }
+                        else missing.Add(refKey);
+                    }
+                }
             }
         }
         try { Fix(dictXml, dict); }
         catch (Exception ex) { Ccw.Log($"{what} resources: BasedOn not completed: {FirstLine(ex)}"); }
-        if (byReader + filled + missing.Count > 0)
-            Ccw.Log($"{what} resources: BasedOn set by the reader {byReader}, filled {filled}" +
+        if (byReader + filled + resourceRefs + missing.Count > 0)
+            Ccw.Log($"{what} resources: BasedOn set by the reader {byReader}, filled {filled}, object references filled {resourceRefs}" +
                     (missing.Count > 0 ? $", not found {string.Join(" ", missing.Distinct())}" : ""));
     }
 

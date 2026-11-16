@@ -84,7 +84,7 @@ public static unsafe class Boxing
             /* the application's own objects: a command as .NET's ICommand, anything else kept as it is */
             if (Ccw.QueryInterface(p, Iids.UI_Xaml_Input_ICommand, out var command) >= 0) return new NativeCommand(command);
             if (NativeList.From(p) is { } list) return list;
-            return new NativeObject(p);
+            return NativeObject.For(p);
         }
         try
         {
@@ -133,7 +133,7 @@ public static unsafe class Boxing
             }
             /* any other IReference<T> (a boxed enum or structure of the application, MyVirtualKey): kept as it is, as the
              * application's object, and given back to it as it was */
-            case 20: return new NativeObject(p);
+            case 20: return NativeObject.For(p);
             default: throw new NotSupportedException($"property value of type {type}");
             }
         }

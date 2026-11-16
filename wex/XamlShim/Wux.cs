@@ -432,6 +432,24 @@ public unsafe partial class UI_Xaml_Window
             embed.Start();
         }
         if (!Ccw.Tracing) return 0;
+        static string FreeMeasure(Microsoft.UI.Xaml.Controls.TextBlock t)
+        {
+            var copy = new Microsoft.UI.Xaml.Controls.TextBlock { Text = t.Text, FontSize = t.FontSize, FontFamily = t.FontFamily, FontWeight = t.FontWeight };
+            copy.Measure(new Windows.Foundation.Size(1000, 1000));
+            return $"{copy.DesiredSize.Width:0.#}x{copy.DesiredSize.Height:0.#}";
+        }
+        static string FontMetrics(Microsoft.UI.Xaml.Controls.TextBlock t)
+        {
+            try
+            {
+                const System.Reflection.BindingFlags all = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public;
+                var details = typeof(Microsoft.UI.Xaml.Controls.TextBlock).GetMethod("GetDefaultFontDetails", all)!.Invoke(t, null)!;
+                var handle = details.GetType().GetProperty("FontHandle", all)!.GetValue(details)!;
+                float P(string n) => Convert.ToSingle(handle.GetType().GetProperty(n, all)!.GetValue(handle), System.Globalization.CultureInfo.InvariantCulture);
+                return $"{handle.GetType().Name} asc {P("Ascent"):0.#} desc {P("Descent"):0.#} cap {P("CapHeight"):0.#}";
+            }
+            catch (Exception e) { return "?" + e.GetType().Name; }
+        }
         static string Short(object? v) => v switch
         {
             null => "null",
@@ -441,6 +459,7 @@ public unsafe partial class UI_Xaml_Window
         };
         /* the tree once the application's first view is up (its content is navigated to after OnLaunched) */
         var timer = new Mux.DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
+        var lateDone = false;
         timer.Tick += (s, e) =>
         {
             timer.Stop();
@@ -448,10 +467,11 @@ public unsafe partial class UI_Xaml_Window
             {
                 if (o is Mux.FrameworkElement fe)
                     Ccw.Log($"tree {new string(' ', depth * 2)}{fe.GetType().Name}" + (string.IsNullOrEmpty(fe.Name) ? "" : $" {fe.Name}") +
-                            $" {fe.ActualWidth:0}x{fe.ActualHeight:0}" + (fe.Visibility != Mux.Visibility.Visible ? " collapsed" : "") +
+                            $" {fe.ActualWidth:0}x{fe.ActualHeight:0}" +
+                            (fe.ActualHeight - Microsoft.UI.Xaml.Controls.Primitives.LayoutInformation.GetAvailableSize(fe).Height > 2 ? $" STALE avail {Microsoft.UI.Xaml.Controls.Primitives.LayoutInformation.GetAvailableSize(fe)} desired {fe.DesiredSize}" : "") + (fe.Visibility != Mux.Visibility.Visible ? " collapsed" : "") +
                             (fe.Opacity < 1 ? $" opacity {fe.Opacity:0.##}" : "") + (fe.IsLoaded ? "" : " not loaded") +
                             (fe is Microsoft.UI.Xaml.Controls.Control ctl && !ctl.IsEnabled ? " disabled" : "") +
-                            (fe is Microsoft.UI.Xaml.Controls.TextBlock tb ? $" text '{tb.Text}' size {tb.FontSize} font {tb.FontFamily?.Source} fg {Short(tb.Foreground)}" +
+                            (fe is Microsoft.UI.Xaml.Controls.TextBlock tb ? $" text '{tb.Text}' size {tb.FontSize} font {tb.FontFamily?.Source} fg {Short(tb.Foreground)} weight {tb.FontWeight.Weight} stretch {tb.FontStretch} bounds {tb.TextLineBounds} lh {tb.LineHeight} lss {tb.LineStackingStrategy} maxl {tb.MaxLines} desired {tb.DesiredSize.Width:0.#}x{tb.DesiredSize.Height:0.#} opacity {tb.Opacity} metrics {FontMetrics(tb)} free {FreeMeasure(tb)} slot {Microsoft.UI.Xaml.Controls.Primitives.LayoutInformation.GetLayoutSlot(tb)} avail {Microsoft.UI.Xaml.Controls.Primitives.LayoutInformation.GetAvailableSize(tb)} margin {tb.Margin} pad {tb.Padding} va {tb.VerticalAlignment} h {tb.Height} maxh {tb.MaxHeight} wrap {tb.TextWrapping} trim {tb.TextTrimming}" +
                                 (tb.GetBindingExpression(Microsoft.UI.Xaml.Controls.TextBlock.TextProperty) is { } be
                                     ? $" bound {be.ParentBinding?.Path?.Path} source {be.DataItem?.GetType().Name ?? "null"}" +
                                       $" relative {be.ParentBinding?.RelativeSource?.Mode}" : "") : "") +
@@ -459,7 +479,7 @@ public unsafe partial class UI_Xaml_Window
                             string.Concat(DependencyProperties.Registered.Where(r => r.Key.Owner.IsInstanceOfType(fe))
                                 .Select(r => $" {r.Key.Name}={Short(fe.GetValue(r.Value))}")) +
                             (fe is Microsoft.UI.Xaml.Controls.ContentControl cc0 ? $" content {cc0.Content?.GetType().Name ?? "null"}" :
-                             fe is Microsoft.UI.Xaml.Controls.ContentPresenter cp0 ? $" content {cp0.Content?.GetType().Name ?? "null"}" : "") +
+                             fe is Microsoft.UI.Xaml.Controls.ContentPresenter cp0 ? $" content {cp0.Content?.GetType().Name ?? "null"} cppad {cp0.Padding} bt {cp0.BorderThickness} margin {cp0.Margin} cr {cp0.CornerRadius} desired {cp0.DesiredSize} avail {Microsoft.UI.Xaml.Controls.Primitives.LayoutInformation.GetAvailableSize(cp0)} cpva {cp0.VerticalContentAlignment} bounds {cp0.TextLineBounds}" : "") +
                             /* what sizes a control that came out flat */
                             (fe is Microsoft.UI.Xaml.Controls.Control c && fe.ActualHeight == 0 && fe.Visibility == Mux.Visibility.Visible
                                 ? $" [style {(c.Style != null ? "set" : "none")} template {(c.Template != null ? "set" : "none")} " +
@@ -478,6 +498,14 @@ public unsafe partial class UI_Xaml_Window
                             (a is Microsoft.UI.Xaml.Controls.ContentControl cc ? $"hca {cc.HorizontalContentAlignment}" :
                              a is Microsoft.UI.Xaml.Controls.ContentPresenter cp ? $"hca {cp.HorizontalContentAlignment}" : ""));
             if (UnoWindow.Content != null) Walk(UnoWindow.Content, 0);
+            /* XAMLSHIM_LATE_TREE=<seconds>: the tree once more that long after the first (with INPUT, to see what typing changed) */
+            if (!lateDone && int.TryParse(Environment.GetEnvironmentVariable("XAMLSHIM_LATE_TREE"), out var late) && late > 0)
+            {
+                lateDone = true;
+                Ccw.Log("tree again");
+                timer.Interval = TimeSpan.FromSeconds(late);
+                timer.Start();
+            }
         };
         timer.Start();
         return 0;

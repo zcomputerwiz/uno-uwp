@@ -58,6 +58,43 @@ public static unsafe partial class NativeControls
             Ccw.ComRelease(overrides);
         }
     }
+    static readonly MethodInfo selectTemplateOf = typeof(NativeControls).GetMethod(nameof(SelectTemplateOf))!;
+
+    /* the application's SelectTemplateCore (IDataTemplateSelectorOverrides) for a selector stand-in; null when it has none or
+     * returns none */
+    public static unsafe Microsoft.UI.Xaml.DataTemplate? SelectTemplateOf(object self, object? item, object? container)
+    {
+        var native = Native(self);
+        if (native == IntPtr.Zero) return null;
+        IntPtr itemPtr = Boxing.Box(item), containerPtr = Boxing.Box(container), result = IntPtr.Zero;
+        try
+        {
+            if (container != null && Ccw.QueryInterface(native, Iids.UI_Xaml_Controls_IDataTemplateSelectorOverrides, out var overrides) >= 0)
+            {
+                try
+                {
+                    int hr = UI_Xaml_Controls_IDataTemplateSelectorOverrides_Call.SelectTemplateCore(overrides, itemPtr, containerPtr, &result);
+                    if (hr < 0) Ccw.Log($"SelectTemplateCore of {self.GetType().FullName}: {hr:x8}");
+                }
+                finally { Ccw.ComRelease(overrides); }
+            }
+            else if (Ccw.QueryInterface(native, Iids.UI_Xaml_Controls_IDataTemplateSelectorOverrides2, out var overrides2) >= 0)
+            {
+                try
+                {
+                    int hr = UI_Xaml_Controls_IDataTemplateSelectorOverrides2_Call.SelectTemplateForItemCore(overrides2, itemPtr, &result);
+                    if (hr < 0) Ccw.Log($"SelectTemplateForItemCore of {self.GetType().FullName}: {hr:x8}");
+                }
+                finally { Ccw.ComRelease(overrides2); }
+            }
+            if (Ccw.Calls) Ccw.Log($"SelectTemplate {self.GetType().Name} item {item?.GetType().Name} -> {result:x}");
+            return result == IntPtr.Zero ? null : Boxing.Unbox(result) as Microsoft.UI.Xaml.DataTemplate;
+        }
+        finally
+        {
+            if (result != IntPtr.Zero) Ccw.ComRelease(result);
+        }
+    }
     static readonly HashSet<string> initialized = new();
 
     /* the dependency property an application type registered under a name (it or a base), or null; asking the
@@ -224,17 +261,19 @@ public static unsafe partial class NativeControls
             foreach (var member in members ?? [])
             {
                 if (unoBase.GetProperty(member, BindingFlags.Instance | BindingFlags.Public | BindingFlags.FlattenHierarchy) != null) continue;
-                var property = builder.DefineProperty(member, PropertyAttributes.None, typeof(object), null);
+                var propertyType = typeof(object);
+                var property = builder.DefineProperty(member, PropertyAttributes.None, propertyType, null);
                 var get = builder.DefineMethod("get_" + member, MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig,
-                                               typeof(object), Type.EmptyTypes);
+                                               propertyType, Type.EmptyTypes);
                 var g = get.GetILGenerator();
                 g.Emit(OpCodes.Ldarg_0);
                 g.Emit(OpCodes.Ldstr, fullName);
                 g.Emit(OpCodes.Ldstr, member);
                 g.Emit(OpCodes.Call, getMember);
+                if (propertyType != typeof(object)) g.Emit(OpCodes.Castclass, propertyType);
                 g.Emit(OpCodes.Ret);
                 var set = builder.DefineMethod("set_" + member, MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig,
-                                               null, [typeof(object)]);
+                                               null, [propertyType]);
                 var s = set.GetILGenerator();
                 s.Emit(OpCodes.Ldarg_0);
                 s.Emit(OpCodes.Ldstr, fullName);
@@ -343,6 +382,36 @@ public static unsafe partial class NativeControls
                 a.MarkLabel(done);
                 a.Emit(OpCodes.Ret);
                 builder.DefineMethodOverride(apply, unoApply);
+            }
+
+            /* a template selector's choice comes from the application's SelectTemplateCore */
+            if (typeof(Microsoft.UI.Xaml.Controls.DataTemplateSelector).IsAssignableFrom(unoBase))
+            {
+                foreach (var withContainer in new[] { false, true })
+                {
+                    var parameters = withContainer ? new[] { typeof(object), typeof(Microsoft.UI.Xaml.DependencyObject) } : new[] { typeof(object) };
+                    var unoSelect = unoBase.GetMethod("SelectTemplateCore", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, parameters, null);
+                    if (unoSelect == null || !unoSelect.IsVirtual || unoSelect.IsFinal) continue;
+                    var select = builder.DefineMethod("SelectTemplateCore", MethodAttributes.Family | MethodAttributes.Virtual | MethodAttributes.HideBySig,
+                                                      typeof(Microsoft.UI.Xaml.DataTemplate), parameters);
+                    var q = select.GetILGenerator();
+                    var useBase = q.DefineLabel();
+                    q.Emit(OpCodes.Ldarg_0);
+                    q.Emit(OpCodes.Ldarg_1);
+                    if (withContainer) q.Emit(OpCodes.Ldarg_2); else q.Emit(OpCodes.Ldnull);
+                    q.Emit(OpCodes.Call, selectTemplateOf);
+                    q.Emit(OpCodes.Dup);
+                    q.Emit(OpCodes.Brfalse, useBase);
+                    q.Emit(OpCodes.Ret);
+                    q.MarkLabel(useBase);
+                    q.Emit(OpCodes.Pop);
+                    q.Emit(OpCodes.Ldarg_0);
+                    q.Emit(OpCodes.Ldarg_1);
+                    if (withContainer) q.Emit(OpCodes.Ldarg_2);
+                    q.Emit(OpCodes.Call, unoSelect);
+                    q.Emit(OpCodes.Ret);
+                    builder.DefineMethodOverride(select, unoSelect);
+                }
             }
 
             /* a markup extension's value comes from the application's ProvideValue */
@@ -472,7 +541,7 @@ public static unsafe partial class NativeControls
         {
             boxed = value is string text ? FromString(m, text) : Boxing.Box(value);
             int hr = UI_Xaml_Markup_IXamlMember_Call.SetValue(m, native, boxed);
-            if (Ccw.Calls || hr < 0) Ccw.Log($"set {type}.{member} = {value}: {hr:x8}");
+            if (Ccw.Calls || hr < 0) Ccw.Log($"set {type}.{member} = {value} ({value?.GetType().Name ?? "null"}): {hr:x8}");
         }
         catch (Exception e) { Ccw.Log($"set {type}.{member} = {value}: {e.Message}"); }
         finally

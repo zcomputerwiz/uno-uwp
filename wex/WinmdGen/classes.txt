@@ -228,3 +228,7 @@ Windows.UI.Xaml.Media.FontFamily
 Windows.UI.Xaml.Setter
 --class
 Windows.UI.Text.FontWeights
+--class
+Windows.UI.Xaml.DataTemplate
+--class
+Windows.UI.Xaml.DataContextChangedEventArgs

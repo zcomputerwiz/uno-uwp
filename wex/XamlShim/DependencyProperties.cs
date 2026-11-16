@@ -114,6 +114,22 @@ sealed unsafe class NativeObject : System.Dynamic.DynamicObject, System.Componen
         if (provider != IntPtr.Zero) Ccw.ComRelease(provider);
         foreach (var p in properties.Values) if (p != IntPtr.Zero) Ccw.ComRelease(p);
     }
+    /* one wrapper per native object while it lives: Uno compares objects by reference (NavigationView's SelectedItem), so the same
+     * object read twice (a list's item, the selection) must be the same .NET object */
+    static readonly Dictionary<IntPtr, WeakReference<NativeObject>> wrappers = new();
+    public static NativeObject For(IntPtr p)
+    {
+        IntPtr id = p;
+        if (Ccw.QueryInterface(p, Ccw.IID_IUnknown, out var unknown) >= 0) { id = unknown; Ccw.ComRelease(unknown); }
+        lock (wrappers)
+        {
+            if (wrappers.TryGetValue(id, out var weak) && weak.TryGetTarget(out var known)) return known;
+            var created = new NativeObject(p);
+            wrappers[id] = new WeakReference<NativeObject>(created);
+            if (wrappers.Count > 4096) foreach (var dead in wrappers.Where(w => !w.Value.TryGetTarget(out _)).Select(w => w.Key).ToList()) wrappers.Remove(dead);
+            return created;
+        }
+    }
     public override bool Equals(object? obj) => obj is NativeObject o && o.identity == identity;
     public override int GetHashCode() => identity.GetHashCode();
 
@@ -263,7 +279,7 @@ static unsafe class Values
             catch (NotSupportedException)
             {
                 /* another box (an enum or struct of the application, OtherType): kept as it is, given back unchanged */
-                return new NativeObject(p);
+                return NativeObject.For(p);
             }
         }
         else if (target.IsEnum)
@@ -272,7 +288,7 @@ static unsafe class Values
             Marshal.ThrowExceptionForHR(((delegate* unmanaged[Stdcall]<IntPtr, int*, int>)(*(IntPtr**)p)[6])(p, &v));
             value = v;
         }
-        else return new NativeObject(p);
+        else return NativeObject.For(p);
         return Convert(value, target);
     }
 

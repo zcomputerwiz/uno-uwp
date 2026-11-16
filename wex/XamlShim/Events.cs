@@ -64,7 +64,12 @@ public static class Events
             s = sender == owner.UnoObject ? Ccw.Get(owner) : Boxing.Box(sender);
             a = Boxing.Box(args);
             int hr = Shim.Invoke(handler, s, a);
-            if (hr < 0) Ccw.Log($"event handler returned {hr:x8} ({owner.RuntimeClassName} {(owner.UnoObject as Microsoft.UI.Xaml.FrameworkElement)?.Name}.{name})");
+            if (hr < 0)
+            {
+                Ccw.Log($"event handler returned {hr:x8} ({owner.RuntimeClassName} {(owner.UnoObject as Microsoft.UI.Xaml.FrameworkElement)?.Name}.{name})");
+                if (args is Microsoft.UI.Xaml.DataContextChangedEventArgs dc)
+                    Ccw.Log($"  DataContext of {sender?.GetType().Name} {(sender as Microsoft.UI.Xaml.FrameworkElement)?.Name}: new {dc.NewValue?.GetType().FullName ?? "null"} {dc.NewValue}");
+            }
         }
         catch (Exception e)
         {
