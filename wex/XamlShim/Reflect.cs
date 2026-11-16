@@ -140,6 +140,7 @@ public static class Reflect
             value = type.IsEnum ? Enum.ToObject(type, Convert.ToInt64(value, CultureInfo.InvariantCulture))
                                 : Convert.ChangeType(value, type, CultureInfo.InvariantCulture);
         if (Ccw.Calls && name == "DataContext") Ccw.Log($"set {target.GetType().FullName} {(target as Microsoft.UI.Xaml.FrameworkElement)?.Name}.DataContext = {value?.GetType().FullName ?? "null"}");
+        if (name == "DataContext" && value is NativeObject probed) NativeControls.Probe(probed.Pointer, "DataContext");
         property.SetValue(target, value);
     }
 }

@@ -323,6 +323,43 @@ public static unsafe partial class NativeControls
         finally { Ccw.ComRelease(m); }
     }
 
+    /* diagnostics: the members XAMLSHIM_PROBE_MEMBERS names (comma-separated) of an application object, read through the
+     * application's XAML metadata (its runtime class name as the XAML type) */
+    static readonly string[] probeMembers = (Environment.GetEnvironmentVariable("XAMLSHIM_PROBE_MEMBERS") ?? "")
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    public static void Probe(IntPtr native, string what)
+    {
+        if (probeMembers.Length == 0 || native == IntPtr.Zero) return;
+        IntPtr h;
+        if (((delegate* unmanaged[Stdcall]<IntPtr, IntPtr*, int>)(*(IntPtr**)native)[4])(native, &h) < 0) return;
+        var type = HString.Read(h);
+        HString.Delete(h);
+        /* .NET Native names its own objects by an interface: XAMLSHIM_PROBE_TYPE gives the XAML type instead */
+        type = Environment.GetEnvironmentVariable("XAMLSHIM_PROBE_TYPE") is { Length: > 0 } given ? given : type;
+        var xamlType = XamlType(type);
+        Ccw.Log($"probe {what}: {type}, {(xamlType == IntPtr.Zero ? "not a XAML type of the application" : "a XAML type")}");
+        if (xamlType == IntPtr.Zero) return;
+        Ccw.ComRelease(xamlType);
+        foreach (var member in probeMembers)
+        {
+            var m = XamlMember(type, member);
+            if (m == IntPtr.Zero) continue;
+            IntPtr value = IntPtr.Zero;
+            int hr = UI_Xaml_Markup_IXamlMember_Call.GetValue(m, native, &value);
+            string text = "null";
+            if (value != IntPtr.Zero)
+            {
+                var unboxed = Boxing.Unbox(value);
+                text = unboxed is NativeObject no && ((delegate* unmanaged[Stdcall]<IntPtr, IntPtr*, int>)(*(IntPtr**)no.Pointer)[4])(no.Pointer, &h) >= 0
+                    ? $"native {HString.Read(h)}" : $"{unboxed}";
+                Ccw.ComRelease(value);
+            }
+            Ccw.Log($"probe {what} {type}.{member}: {hr:x8} {text}");
+            Ccw.ComRelease(m);
+        }
+    }
+
     public static void SetMember(object self, string type, string member, object? value)
     {
         var native = Native(self);
