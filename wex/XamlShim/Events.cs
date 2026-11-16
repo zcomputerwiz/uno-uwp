@@ -35,7 +35,7 @@ public static class Events
             return unchecked((int)0x80004001);
         }
         /* (sender, args) => Events.Raise(handler, shim, sender, args) */
-        var body = Expression.Call(raise, Expression.Constant(handler), Expression.Constant(shim, typeof(ShimObject)),
+        var body = Expression.Call(raise, Expression.Constant(handler), Expression.Constant(shim, typeof(ShimObject)), Expression.Constant(name),
                                    Expression.Convert(parameters[0], typeof(object)), Expression.Convert(parameters[1], typeof(object)));
         var callback = Expression.Lambda(type, body, parameters).Compile();
         Ccw.ComAddRef(handler);
@@ -56,7 +56,7 @@ public static class Events
     }
 
     /* the sender is the element's shim (its outer object when the application derived from it) */
-    static void Raise(IntPtr handler, ShimObject owner, object? sender, object? args)
+    static void Raise(IntPtr handler, ShimObject owner, string name, object? sender, object? args)
     {
         IntPtr s = IntPtr.Zero, a = IntPtr.Zero;
         try
@@ -64,7 +64,7 @@ public static class Events
             s = sender == owner.UnoObject ? Ccw.Get(owner) : Boxing.Box(sender);
             a = Boxing.Box(args);
             int hr = Shim.Invoke(handler, s, a);
-            if (hr < 0) Ccw.Log($"event handler returned {hr:x8}");
+            if (hr < 0) Ccw.Log($"event handler returned {hr:x8} ({owner.RuntimeClassName} {(owner.UnoObject as Microsoft.UI.Xaml.FrameworkElement)?.Name}.{name})");
         }
         catch (Exception e)
         {

@@ -345,6 +345,49 @@ public unsafe partial class UI_Xaml_Window
         return UI_Core_ICoreWindow_Call.get_Dispatcher(FrameworkView.CoreWindow, result);
     }
 
+    /* Activated, Closed, SizeChanged and VisibilityChanged: the CoreWindow's events of the same names (their arguments
+     * are the CoreWindow's), raised with this window as the sender; without a CoreWindow they are never raised */
+    static readonly Guid activatedHandler = new("26a73b35-a7f9-52db-88d6-15726deb2523");   /* TypedEventHandler<CoreWindow, WindowActivatedEventArgs> */
+    static readonly Guid closedHandler = new("d08e4f66-3457-57f2-ba0c-cb347133bd15");      /* TypedEventHandler<CoreWindow, CoreWindowEventArgs> */
+    static readonly Guid sizeChangedHandler = new("318dbb67-4089-5690-9040-1d454fb2f686"); /* TypedEventHandler<CoreWindow, WindowSizeChangedEventArgs> */
+    static readonly Guid visibilityHandler = new("14b7f692-5583-52a1-aa42-fc1843c0f748");  /* TypedEventHandler<CoreWindow, VisibilityChangedEventArgs> */
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<long, IntPtr> relayed = new();
+
+    int Relay(IntPtr handler, Guid iid, delegate*<IntPtr, IntPtr, long*, int> add, long* token)
+    {
+        if (handler == IntPtr.Zero) return unchecked((int)0x80070057);   /* E_INVALIDARG */
+        if (FrameworkView.CoreWindow == IntPtr.Zero) { *token = Shim.Token(); return 0; }
+        Ccw.ComAddRef(handler);
+        var relay = new NativeDelegate(iid, (sender, args) =>
+        {
+            var self = Ccw.Get(this);
+            try { int hr = Shim.Invoke(handler, self, args); if (hr < 0) Ccw.Log($"Window event handler returned {hr:x8}"); }
+            finally { Ccw.ComRelease(self); }
+        });
+        var r = Ccw.Get(relay, iid);
+        int result = add(FrameworkView.CoreWindow, r, token);
+        Ccw.ComRelease(r);
+        if (result < 0) Ccw.ComRelease(handler);
+        else relayed[*token] = handler;
+        return result;
+    }
+
+    int Unrelay(long token, delegate*<IntPtr, long, int> remove)
+    {
+        if (!relayed.TryRemove(token, out var handler)) return 0;
+        Ccw.ComRelease(handler);
+        return FrameworkView.CoreWindow == IntPtr.Zero ? 0 : remove(FrameworkView.CoreWindow, token);
+    }
+
+    int IUI_Xaml_IWindow_Abi.add_Activated(IntPtr handler, long* token) => Relay(handler, activatedHandler, &UI_Core_ICoreWindow_Call.add_Activated, token);
+    int IUI_Xaml_IWindow_Abi.remove_Activated(long token) => Unrelay(token, &UI_Core_ICoreWindow_Call.remove_Activated);
+    int IUI_Xaml_IWindow_Abi.add_Closed(IntPtr handler, long* token) => Relay(handler, closedHandler, &UI_Core_ICoreWindow_Call.add_Closed, token);
+    int IUI_Xaml_IWindow_Abi.remove_Closed(long token) => Unrelay(token, &UI_Core_ICoreWindow_Call.remove_Closed);
+    int IUI_Xaml_IWindow_Abi.add_SizeChanged(IntPtr handler, long* token) => Relay(handler, sizeChangedHandler, &UI_Core_ICoreWindow_Call.add_SizeChanged, token);
+    int IUI_Xaml_IWindow_Abi.remove_SizeChanged(long token) => Unrelay(token, &UI_Core_ICoreWindow_Call.remove_SizeChanged);
+    int IUI_Xaml_IWindow_Abi.add_VisibilityChanged(IntPtr handler, long* token) => Relay(handler, visibilityHandler, &UI_Core_ICoreWindow_Call.add_VisibilityChanged, token);
+    int IUI_Xaml_IWindow_Abi.remove_VisibilityChanged(long token) => Unrelay(token, &UI_Core_ICoreWindow_Call.remove_VisibilityChanged);
+
     int IUI_Xaml_IWindow_Abi.Activate()
     {
         /* the first layout already at the CoreWindow's size, as on Windows: place Uno's window before it is shown */
