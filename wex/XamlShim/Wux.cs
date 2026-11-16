@@ -38,6 +38,17 @@ static class Shim
 
     static Type? ShimType(Type unoType) => shimTypes.GetOrAdd(unoType, t =>
     {
+        var found = FindShimType(t);
+        /* a Uno framework class served by its base's shim lacks its own interfaces (an application's cast to them
+         * fails): logged once per class, to find the classes to generate */
+        if (found != null && t.FullName is { } n && n.StartsWith("Microsoft.UI.Xaml.", StringComparison.Ordinal) &&
+            !found.Name.EndsWith(n[n.LastIndexOf('.')..].Replace('.', '_'), StringComparison.Ordinal))
+            Ccw.Log($"shim of base class {found.Name} for {n}");
+        return found;
+    });
+
+    static Type? FindShimType(Type? t)
+    {
         const string prefix = "Microsoft.UI.Xaml.";
         for (; t != null; t = t.BaseType)
         {
@@ -55,7 +66,7 @@ static class Shim
             }
         }
         return null;
-    });
+    }
 
     public static object? UnoOf(IntPtr p) => Ccw.Unwrap(p)?.UnoObject;
 

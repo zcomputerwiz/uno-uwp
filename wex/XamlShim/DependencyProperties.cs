@@ -272,6 +272,21 @@ public unsafe partial class UI_Xaml_PropertyPath_Factory
     }
 }
 
+/* Style.TargetType: the type as the application names it */
+public unsafe partial class UI_Xaml_Style
+{
+    int IUI_Xaml_IStyle_Abi.get_TargetType(TypeName* result)
+    {
+        *result = NativeObjects.ToTypeName(((Mux.Style)UnoObject!).TargetType);
+        return 0;
+    }
+    int IUI_Xaml_IStyle_Abi.put_TargetType(TypeName value)
+    {
+        ((Mux.Style)UnoObject!).TargetType = NativeTypes.For(value);
+        return 0;
+    }
+}
+
 /* new PropertyChangedEventArgs(name): what an application's INotifyPropertyChanged raises (C++/CX view models make
  * one for every property they change); composable */
 public unsafe partial class UI_Xaml_Data_PropertyChangedEventArgs

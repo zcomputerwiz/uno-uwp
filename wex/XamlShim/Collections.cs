@@ -146,41 +146,50 @@ public sealed class AbiList<T>(IList<T> inner) : IAbiList
     public void Clear() => inner.Clear();
 }
 
-/* IVector<T>, IIterable<T>, IObservableVector<T> over a Uno list; T is UIElement or Object */
+/* IVector<T>, IIterable<T>, IObservableVector<T> over a Uno list; T is a runtime class (its items are shims, passed
+ * as its default interface: UIElement, SetterBase) or Object (boxed values too) */
 public sealed unsafe class VectorShim : ShimObject
 {
     const string IVector = "{913337e9-11a1-4345-a3a2-4e7f956e222d}", IIterable = "{faa585ea-6214-4217-afda-7f46de5869b3}",
                  IObservableVector = "{5917eb53-50b4-4a0d-b309-65862b3f1dbc}";
 
     readonly IAbiList list;
-    readonly bool elements;       /* T is UIElement: items are shims (IUIElement); else Object: boxed values too */
+    readonly Guid? elementIid;    /* the default interface of T when T is a runtime class; null for Object */
     readonly string className;
     readonly (Guid, IntPtr, Func<object, bool>)[] table;
 
-    public static readonly string ElementSig = "rc(Windows.UI.Xaml.UIElement;" + PInterface.Sig(Iids.UI_Xaml_IUIElement) + ")";
     public const string ObjectSig = "cinterface(IInspectable)";
 
     public VectorShim(IAbiList list, bool elements, string className)
+        : this(list, elements ? ("Windows.UI.Xaml.UIElement", Iids.UI_Xaml_IUIElement) : null, className) { }
+
+    /* element: T's runtime class name and default interface, null for Object; extra: the collection class's own
+     * interfaces (SetterBaseCollection's IsSealed) */
+    public VectorShim(IAbiList list, (string Class, Guid Iid)? element, string className,
+                      params (Guid, IntPtr, Func<object, bool>)[] extra)
     {
         this.list = list;
-        this.elements = elements;
+        elementIid = element?.Iid;
         this.className = className;
-        var t = elements ? ElementSig : ObjectSig;
+        var t = element is { } e ? $"rc({e.Class};{PInterface.Sig(e.Iid)})" : ObjectSig;
         table = [(PInterface.Iid($"pinterface({IVector};{t})"), VectorVtbl, _ => true),
                  (PInterface.Iid($"pinterface({IIterable};{t})"), IterableVtbl, _ => true),
-                 (PInterface.Iid($"pinterface({IObservableVector};{t})"), ObservableVtbl, _ => true)];
+                 (PInterface.Iid($"pinterface({IObservableVector};{t})"), ObservableVtbl, _ => true), .. extra];
     }
 
     public override string RuntimeClassName => className;
     internal override (Guid Iid, IntPtr Vtbl, Func<object, bool> Implements)[]? CustomInterfaces => table;
 
+    /* the Uno collection, for the collection class's own interfaces */
+    public object? Source { get; init; }
+
     IntPtr ToNative(object? item)
     {
-        if (!elements) return Boxing.Box(item);
-        return item is Mux.DependencyObject d ? Ccw.Get(Shim.For(d), Iids.UI_Xaml_IUIElement) : IntPtr.Zero;
+        if (elementIid is not { } iid) return Boxing.Box(item);
+        return item is Mux.DependencyObject d ? Ccw.Get(Shim.For(d), iid) : IntPtr.Zero;
     }
 
-    object? FromNative(IntPtr p) => elements ? Shim.UnoOf(p) : Boxing.Unbox(p);
+    object? FromNative(IntPtr p) => elementIid != null ? Shim.UnoOf(p) : Boxing.Unbox(p);
 
     static VectorShim Self(IntPtr block) => (VectorShim)Ccw.Target(block);
 
@@ -288,4 +297,37 @@ public sealed unsafe class VectorShim : ShimObject
     static int AddVectorChanged(IntPtr b, IntPtr handler, long* token) { Ccw.NotImplemented("IObservableVector.add_VectorChanged (accepted, not raised)"); *token = Shim.Token(); return 0; }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
     static int RemoveVectorChanged(IntPtr b, long token) => 0;
+}
+
+/* Style.Setters: a SetterBaseCollection, IVector<SetterBase> over Uno's, with its IsSealed */
+public unsafe partial class UI_Xaml_Style
+{
+    static readonly Guid ISetterBaseCollection = new("03c40ca8-909e-4117-811c-a4529496bdf1");
+    static readonly IntPtr SetterBaseCollectionVtbl = MakeSetterBaseCollection();
+    VectorShim? setters;
+
+    static IntPtr MakeSetterBaseCollection()
+    {
+        var v = (IntPtr*)RuntimeHelpers.AllocateTypeAssociatedMemory(typeof(UI_Xaml_Style), sizeof(IntPtr) * 7);
+        Ccw.FillInspectable(v);
+        v[6] = (IntPtr)(delegate* unmanaged[Stdcall]<IntPtr, byte*, int>)&GetIsSealed;
+        return (IntPtr)v;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
+    static int GetIsSealed(IntPtr b, byte* result)
+    {
+        *result = ((VectorShim)Ccw.Target(b)).Source is Mux.SetterBaseCollection c && c.IsSealed ? (byte)1 : (byte)0;
+        return 0;
+    }
+
+    int IUI_Xaml_IStyle_Abi.get_Setters(IntPtr* result)
+    {
+        var c = ((Mux.Style)UnoObject!).Setters;
+        setters ??= new VectorShim(new AbiList<Mux.SetterBase>(c), ("Windows.UI.Xaml.SetterBase", Iids.UI_Xaml_ISetterBase),
+                                   "Windows.UI.Xaml.SetterBaseCollection", (ISetterBaseCollection, SetterBaseCollectionVtbl, _ => true))
+                   { Source = c };
+        *result = Ccw.GetDefault(setters);
+        return 0;
+    }
 }
