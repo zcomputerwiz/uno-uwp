@@ -59,6 +59,17 @@ public static unsafe class Boxing
         case bool b: Marshal.ThrowExceptionForHR(Foundation_IPropertyValueStatics_Call.CreateBoolean(Statics(), (byte)(b ? 1 : 0), &result)); return result;
         case double v: Marshal.ThrowExceptionForHR(Foundation_IPropertyValueStatics_Call.CreateDouble(Statics(), v, &result)); return result;
         case int i: Marshal.ThrowExceptionForHR(Foundation_IPropertyValueStatics_Call.CreateInt32(Statics(), i, &result)); return result;
+        case char v: Marshal.ThrowExceptionForHR(Foundation_IPropertyValueStatics_Call.CreateChar16(Statics(), v, &result)); return result;
+        case byte v: Marshal.ThrowExceptionForHR(Foundation_IPropertyValueStatics_Call.CreateUInt8(Statics(), v, &result)); return result;
+        case short v: Marshal.ThrowExceptionForHR(Foundation_IPropertyValueStatics_Call.CreateInt16(Statics(), v, &result)); return result;
+        case ushort v: Marshal.ThrowExceptionForHR(Foundation_IPropertyValueStatics_Call.CreateUInt16(Statics(), v, &result)); return result;
+        case uint v: Marshal.ThrowExceptionForHR(Foundation_IPropertyValueStatics_Call.CreateUInt32(Statics(), v, &result)); return result;
+        case long v: Marshal.ThrowExceptionForHR(Foundation_IPropertyValueStatics_Call.CreateInt64(Statics(), v, &result)); return result;
+        case ulong v: Marshal.ThrowExceptionForHR(Foundation_IPropertyValueStatics_Call.CreateUInt64(Statics(), v, &result)); return result;
+        case float v: Marshal.ThrowExceptionForHR(Foundation_IPropertyValueStatics_Call.CreateSingle(Statics(), v, &result)); return result;
+        case Guid v: Marshal.ThrowExceptionForHR(Foundation_IPropertyValueStatics_Call.CreateGuid(Statics(), v, &result)); return result;
+        case TimeSpan v: Marshal.ThrowExceptionForHR(Foundation_IPropertyValueStatics_Call.CreateTimeSpan(Statics(), v.Ticks, &result)); return result;
+        case DateTimeOffset v: Marshal.ThrowExceptionForHR(Foundation_IPropertyValueStatics_Call.CreateDateTime(Statics(), v.ToFileTime(), &result)); return result;
         default: throw new NotSupportedException("cannot box " + value.GetType().FullName);
         }
     }
@@ -81,8 +92,21 @@ public static unsafe class Boxing
             Marshal.ThrowExceptionForHR(Foundation_IPropertyValue_Call.get_Type(pv, &type));
             switch (type)
             {
+            /* PropertyType: UInt8 1, Int16 2, UInt16 3, Int32 4, UInt32 5, Int64 6, UInt64 7, Single 8, Double 9,
+             * Char16 10, Boolean 11, String 12, DateTime 14, TimeSpan 15, Guid 16 */
+            case 1: { byte v; Marshal.ThrowExceptionForHR(Foundation_IPropertyValue_Call.GetUInt8(pv, &v)); return v; }
+            case 2: { short v; Marshal.ThrowExceptionForHR(Foundation_IPropertyValue_Call.GetInt16(pv, &v)); return v; }
+            case 3: { ushort v; Marshal.ThrowExceptionForHR(Foundation_IPropertyValue_Call.GetUInt16(pv, &v)); return v; }
             case 4: { int v; Marshal.ThrowExceptionForHR(Foundation_IPropertyValue_Call.GetInt32(pv, &v)); return v; }
+            case 5: { uint v; Marshal.ThrowExceptionForHR(Foundation_IPropertyValue_Call.GetUInt32(pv, &v)); return v; }
+            case 6: { long v; Marshal.ThrowExceptionForHR(Foundation_IPropertyValue_Call.GetInt64(pv, &v)); return v; }
+            case 7: { ulong v; Marshal.ThrowExceptionForHR(Foundation_IPropertyValue_Call.GetUInt64(pv, &v)); return v; }
+            case 8: { float v; Marshal.ThrowExceptionForHR(Foundation_IPropertyValue_Call.GetSingle(pv, &v)); return v; }
             case 9: { double v; Marshal.ThrowExceptionForHR(Foundation_IPropertyValue_Call.GetDouble(pv, &v)); return v; }
+            case 10: { char v; Marshal.ThrowExceptionForHR(Foundation_IPropertyValue_Call.GetChar16(pv, &v)); return v; }
+            case 14: { long v; Marshal.ThrowExceptionForHR(Foundation_IPropertyValue_Call.GetDateTime(pv, &v)); return DateTimeOffset.FromFileTime(v); }
+            case 15: { long v; Marshal.ThrowExceptionForHR(Foundation_IPropertyValue_Call.GetTimeSpan(pv, &v)); return TimeSpan.FromTicks(v); }
+            case 16: { Guid v; Marshal.ThrowExceptionForHR(Foundation_IPropertyValue_Call.GetGuid(pv, &v)); return v; }
             case 11: { byte v; Marshal.ThrowExceptionForHR(Foundation_IPropertyValue_Call.GetBoolean(pv, &v)); return v != 0; }
             case 12:
             {

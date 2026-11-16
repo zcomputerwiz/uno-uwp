@@ -75,6 +75,7 @@ public static unsafe partial class XbfLoader
             var element = new XElement(content[0]);
             foreach (var ns in top.Attributes().Where(a => a.IsNamespaceDeclaration)) element.SetAttributeValue(ns.Name, ns.Value);
             ResolveConditionalNamespaces(element);
+            MapPackageUris(element);
             NativeControls.Prepare(element);
             QualifyTargetTypes(element);
             QualifyAttachedSetters(element);
@@ -240,6 +241,7 @@ public static unsafe partial class XbfLoader
         var namespaces = top.Attributes().Where(a => a.IsNamespaceDeclaration).ToList();
         foreach (var ns in namespaces) dict.SetAttributeValue(ns.Name, ns.Value);
         ResolveConditionalNamespaces(dict);
+        MapPackageUris(dict);
         NativeControls.Prepare(dict);
         QualifyTargetTypes(dict);
         QualifyAttachedSetters(dict);
@@ -311,6 +313,18 @@ public static unsafe partial class XbfLoader
         foreach (var ns in unoNamespaces)
             if (NativeTypes.UnoType("Windows.UI.Xaml" + ns["Microsoft.UI.Xaml".Length..] + "." + name) is { } t) return t;
         return null;
+    }
+
+    /* ms-appx:/// is the application's package, but Uno resolves it in its own folder (the shim's assets and Uno's
+     * fonts are there). A package file named this way, in an attribute or a text value (FontFamily
+     * "ms-appx:///Assets/CalculatorIcons.ttf#Calculator Fluent Icons", Image Source), becomes a file: URI of the file in
+     * the package; what is not in the package stays as it is. */
+    internal static void MapPackageUris(XElement root)
+    {
+        foreach (var a in root.DescendantsAndSelf().SelectMany(e => e.Attributes()))
+            if (PackageUri.Map(a.Value) is { } mapped) a.Value = mapped;
+        foreach (var t in root.DescendantNodes().OfType<XText>())
+            if (PackageUri.Map(t.Value.Trim()) is { } mapped) t.Value = mapped;
     }
 
     /* conditional XAML namespaces (xmlns:c="...presentation?IsApiContractPresent(Windows.Foundation.UniversalApiContract,7)"):

@@ -443,6 +443,8 @@ public unsafe partial class UI_Xaml_Window
                             $" {fe.ActualWidth:0}x{fe.ActualHeight:0}" + (fe.Visibility != Mux.Visibility.Visible ? " collapsed" : "") +
                             (fe.Opacity < 1 ? $" opacity {fe.Opacity:0.##}" : "") + (fe.IsLoaded ? "" : " not loaded") +
                             (fe is Microsoft.UI.Xaml.Controls.TextBlock tb ? $" text '{tb.Text}' size {tb.FontSize} font {tb.FontFamily?.Source}" : "") +
+                            (fe is Microsoft.UI.Xaml.Controls.ContentControl cc0 ? $" content {cc0.Content?.GetType().Name ?? "null"}" :
+                             fe is Microsoft.UI.Xaml.Controls.ContentPresenter cp0 ? $" content {cp0.Content?.GetType().Name ?? "null"}" : "") +
                             /* what sizes a control that came out flat */
                             (fe is Microsoft.UI.Xaml.Controls.Control c && fe.ActualHeight == 0 && fe.Visibility == Mux.Visibility.Visible
                                 ? $" [style {(c.Style != null ? "set" : "none")} template {(c.Template != null ? "set" : "none")} " +
@@ -535,9 +537,10 @@ public unsafe partial class UI_Xaml_Media_GeneralTransform
 
 public unsafe partial class UI_Xaml_Controls_ContentControl
 {
+    /* any content: elements, values (the Calculator's digit buttons get a Char16) and the application's objects */
     int IUI_Xaml_Controls_IContentControl_Abi.put_Content(IntPtr value)
     {
-        ((UnoControls.ContentControl)UnoObject!).Content = Shim.UnoOf(value);
+        ((UnoControls.ContentControl)UnoObject!).Content = Boxing.Unbox(value);
         return 0;
     }
 }

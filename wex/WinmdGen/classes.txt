@@ -133,6 +133,8 @@ Windows.UI.Xaml.VisualState
 --class
 Windows.UI.Xaml.VisualStateGroup
 --class
+Windows.UI.Xaml.VisualStateChangedEventArgs
+--class
 Windows.UI.Xaml.Documents.Hyperlink
 --class
 Windows.UI.Xaml.Documents.Run
