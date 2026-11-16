@@ -14,7 +14,7 @@ using UnoControls = Microsoft.UI.Xaml.Controls;
 
 namespace XamlShim.Abi;
 
-public static unsafe class XbfLoader
+public static unsafe partial class XbfLoader
 {
     static readonly XNamespace X = "http://schemas.microsoft.com/winfx/2006/xaml";
 
@@ -248,6 +248,7 @@ public static unsafe class XbfLoader
         {
             var whole = (Mux.ResourceDictionary)Mux.Markup.XamlReader.Load(dict.ToString());
             ApplyDeferred(whole, deferred);
+            FixBasedOn(dict, whole, whole, what);
             Ccw.Log($"{what} resources: {whole.Count} entries, {whole.MergedDictionaries.Count} merged, {whole.ThemeDictionaries.Count} themes");
             return whole;
         }
@@ -290,6 +291,7 @@ public static unsafe class XbfLoader
             }
         }
         ApplyDeferred(result, deferred);
+        FixBasedOn(dict, result, result, what);
         Ccw.Log($"{what} resources: {result.Count} entries, {result.MergedDictionaries.Count} merged, {result.ThemeDictionaries.Count} themes");
         return result;
     }
@@ -494,6 +496,78 @@ public static unsafe class XbfLoader
 
     static object? Find(Mux.ResourceDictionary root, string key) =>
         root.TryGetValue(key, out var v) ? v : Mux.Application.Current.Resources.TryGetValue(key, out v) ? v : null;
+
+    /* Style.BasedOn="{StaticResource Key}": Uno's reader leaves it null when the key is not resolved while it reads
+     * (Style.BasedOn is not a dependency property, so nothing resolves it later), which drops every inherited setter
+     * (the Calculator's NumericButtonStyle* keep only their FontSize). Set from the XAML once the dictionary is built:
+     * the base is looked up in the style's dictionary, the root dictionary, the application's and then the framework's. */
+    static void FixBasedOn(XElement dictXml, Mux.ResourceDictionary dict, Mux.ResourceDictionary root, string what)
+    {
+        int byReader = 0, filled = 0;
+        var missing = new List<string>();
+        void Fix(XElement xml, Mux.ResourceDictionary d)
+        {
+            var merged = 0;
+            foreach (var e in xml.Elements())
+            {
+                var local = e.Name.LocalName;
+                if (local == "ResourceDictionary.ThemeDictionaries")
+                {
+                    foreach (var t in e.Elements())
+                        if (t.Attribute(X + "Key")?.Value is { } k && d.ThemeDictionaries.TryGetValue(k, out var td) && td is Mux.ResourceDictionary theme)
+                            Fix(t, theme);
+                }
+                else if (local == "ResourceDictionary.MergedDictionaries")
+                {
+                    foreach (var m in e.Elements())
+                    {
+                        if (merged < d.MergedDictionaries.Count && m.Attribute("Source") == null) Fix(m, d.MergedDictionaries[merged]);
+                        merged++;
+                    }
+                }
+                else if (local == "Style" && e.Attribute("BasedOn")?.Value is { } basedOn)
+                {
+                    var style = StyleOf(e, d);
+                    if (style == null) continue;
+                    if (style.BasedOn != null) { byReader++; continue; }
+                    var key = MarkupKey(basedOn);
+                    if (key == null) continue;
+                    var found = (d.TryGetValue(key, out var v) ? v : null) ?? (root.TryGetValue(key, out v) ? v : null) ??
+                                (Mux.Application.Current?.Resources is { } app && app.TryGetValue(key, out v) ? v : null) ??
+                                Uno.UI.ResourceResolver.ResolveResourceStatic<Mux.Style>(key);
+                    if (found is Mux.Style b && !style.IsSealed) { style.BasedOn = b; filled++; }
+                    else missing.Add(key);
+                }
+            }
+        }
+        try { Fix(dictXml, dict); }
+        catch (Exception ex) { Ccw.Log($"{what} resources: BasedOn not completed: {FirstLine(ex)}"); }
+        if (byReader + filled + missing.Count > 0)
+            Ccw.Log($"{what} resources: BasedOn set by the reader {byReader}, filled {filled}" +
+                    (missing.Count > 0 ? $", not found {string.Join(" ", missing.Distinct())}" : ""));
+    }
+
+    /* the style an element of a dictionary's XAML became: by its x:Key, else (implicit style) by its target type */
+    static Mux.Style? StyleOf(XElement e, Mux.ResourceDictionary d)
+    {
+        if (e.Attribute(X + "Key")?.Value is { } key) return d.TryGetValue(key, out var v) ? v as Mux.Style : null;
+        var target = e.Attribute("TargetType")?.Value;
+        if (target == null) return null;
+        var name = target[(target.LastIndexOfAny([':', '.']) + 1)..];
+        foreach (var kv in d)
+            if (kv.Key is Type t && t.Name == name && kv.Value is Mux.Style s) return s;
+        return null;
+    }
+
+    /* Key of "{StaticResource Key}", "{StaticResource ResourceKey=Key}" or "{ThemeResource Key}" */
+    static string? MarkupKey(string markup)
+    {
+        var m = ResourceMarkup().Match(markup);
+        return m.Success ? m.Groups[1].Value : null;
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^\{\s*(?:StaticResource|ThemeResource)\s+(?:ResourceKey\s*=\s*)?([^}\s]+)\s*\}$")]
+    private static partial System.Text.RegularExpressions.Regex ResourceMarkup();
 
     static void ApplyDeferred(Mux.ResourceDictionary root, List<Deferred> deferred)
     {

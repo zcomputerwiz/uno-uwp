@@ -431,15 +431,24 @@ public unsafe partial class UI_Xaml_Window
             embed.Start();
         }
         if (!Ccw.Tracing) return 0;
-        var timer = new Mux.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        /* the tree once the application's first view is up (its content is navigated to after OnLaunched) */
+        var timer = new Mux.DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
         timer.Tick += (s, e) =>
         {
             timer.Stop();
             void Walk(Mux.DependencyObject o, int depth)
             {
                 if (o is Mux.FrameworkElement fe)
-                    Ccw.Log($"tree {new string(' ', depth * 2)}{fe.GetType().Name} {fe.ActualWidth:0}x{fe.ActualHeight:0} loaded {fe.IsLoaded}");
-                if (depth > 12) return;
+                    Ccw.Log($"tree {new string(' ', depth * 2)}{fe.GetType().Name}" + (string.IsNullOrEmpty(fe.Name) ? "" : $" {fe.Name}") +
+                            $" {fe.ActualWidth:0}x{fe.ActualHeight:0}" + (fe.Visibility != Mux.Visibility.Visible ? " collapsed" : "") +
+                            (fe.Opacity < 1 ? $" opacity {fe.Opacity:0.##}" : "") + (fe.IsLoaded ? "" : " not loaded") +
+                            (fe is Microsoft.UI.Xaml.Controls.TextBlock tb ? $" text '{tb.Text}' size {tb.FontSize} font {tb.FontFamily?.Source}" : "") +
+                            /* what sizes a control that came out flat */
+                            (fe is Microsoft.UI.Xaml.Controls.Control c && fe.ActualHeight == 0 && fe.Visibility == Mux.Visibility.Visible
+                                ? $" [style {(c.Style != null ? "set" : "none")} template {(c.Template != null ? "set" : "none")} " +
+                                  $"h {c.Height} min {c.MinHeight} max {c.MaxHeight} v {c.VerticalAlignment} margin {c.Margin} " +
+                                  $"padding {c.Padding} font {c.FontSize} desired {c.DesiredSize}]" : ""));
+                if (depth > 40) return;
                 int n = Mux.Media.VisualTreeHelper.GetChildrenCount(o);
                 for (int i = 0; i < n; i++) Walk(Mux.Media.VisualTreeHelper.GetChild(o, i), depth + 1);
             }
