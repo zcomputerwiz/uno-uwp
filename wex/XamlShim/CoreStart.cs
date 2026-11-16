@@ -157,7 +157,7 @@ public static unsafe class CoreWindowHost
 {
     [DllImport("user32.dll")] static extern int EnumThreadWindows(uint thread, delegate* unmanaged[Stdcall]<IntPtr, IntPtr, int> proc, IntPtr param);
     [DllImport("user32.dll")] static extern int IsWindowVisible(IntPtr hwnd);
-    [DllImport("user32.dll")] static extern IntPtr SetParent(IntPtr child, IntPtr parent);
+    [DllImport("user32.dll", SetLastError = true)] static extern IntPtr SetParent(IntPtr child, IntPtr parent);
     [DllImport("user32.dll")] static extern IntPtr GetWindowLongPtrW(IntPtr hwnd, int index);
     [DllImport("user32.dll")] static extern IntPtr SetWindowLongPtrW(IntPtr hwnd, int index, IntPtr value);
     [DllImport("user32.dll")] static extern int GetClientRect(IntPtr hwnd, int* rect);
@@ -171,6 +171,8 @@ public static unsafe class CoreWindowHost
     const long WS_CHILD = 0x40000000, WS_POPUP = 0x80000000, WS_CAPTION = 0xC00000, WS_THICKFRAME = 0x40000,
                WS_SYSMENU = 0x80000, WS_MINIMIZEBOX = 0x20000, WS_MAXIMIZEBOX = 0x10000, WS_VISIBLE = 0x10000000;
     const uint WM_SIZE = 0x0005, WM_SETFOCUS = 0x0007;
+    const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOZORDER = 0x4, SWP_NOACTIVATE = 0x10, SWP_FRAMECHANGED = 0x20;
+    [DllImport("user32.dll")] static extern int SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int w, int h, uint flags);
 
     static IntPtr child, oldProc;
     static readonly List<IntPtr> found = new();
@@ -194,6 +196,22 @@ public static unsafe class CoreWindowHost
         return 1;
     }
 
+    [DllImport("user32.dll")] static extern IntPtr GetWindowDpiAwarenessContext(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+    [DllImport("user32.dll")] static extern IntPtr GetThreadDpiAwarenessContext();
+
+    /* SetParent only takes windows of compatible DPI awareness (ERROR_INVALID_STATE_TRANSITION, 5023, as on Windows):
+     * the thread creates Uno's window with the CoreWindow's awareness context */
+    public static void MatchDpiAwareness()
+    {
+        var core = FrameworkView.CoreHwnd;
+        if (core == IntPtr.Zero) return;
+        var want = GetWindowDpiAwarenessContext(core);
+        var had = GetThreadDpiAwarenessContext();
+        var previous = SetThreadDpiAwarenessContext(want);
+        Ccw.Log($"DPI awareness: CoreWindow {want:x}, thread had {had:x}, set (previous {previous:x})");
+    }
+
     /* true when Uno's window was found and placed */
     public static bool Embed()
     {
@@ -208,9 +226,14 @@ public static unsafe class CoreWindowHost
         var style = (long)GetWindowLongPtrW(child, GWL_STYLE);
         style = (style & ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)) | WS_CHILD | WS_VISIBLE;
         SetWindowLongPtrW(child, GWL_STYLE, (IntPtr)style);
-        SetParent(child, core);
+        /* the frame is gone: the client area is the whole window (else its origin stays inset by the old caption and borders) */
+        _ = SetWindowPos(child, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        var previousParent = SetParent(child, core);
+        Ccw.Log($"SetParent({child:x}, {core:x}): previous parent {previousParent:x}, error {Marshal.GetLastWin32Error()}, now {GetParent(child):x}; " +
+                $"DPI awareness of Uno's window {GetWindowDpiAwarenessContext(child):x}, of the CoreWindow {GetWindowDpiAwarenessContext(core):x}");
         Fit();
         oldProc = SetWindowLongPtrW(core, GWLP_WNDPROC, (IntPtr)(delegate* unmanaged[Stdcall]<IntPtr, uint, IntPtr, IntPtr, IntPtr>)&CoreProc);
+        childProc = SetWindowLongPtrW(child, GWLP_WNDPROC, (IntPtr)(delegate* unmanaged[Stdcall]<IntPtr, uint, IntPtr, IntPtr, IntPtr>)&ChildProc);
         _ = ShowWindow(child, 5);
         SetFocus(child);
         int hr = UI_Core_ICoreWindow_Call.Activate(FrameworkView.CoreWindow);
@@ -231,9 +254,32 @@ public static unsafe class CoreWindowHost
         var queue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
         var timer = queue?.CreateTimer();
         if (timer == null) { Ccw.Log("draw check: no dispatcher queue"); return; }
-        timer.Interval = TimeSpan.FromSeconds(10);
-        timer.IsRepeating = false;
-        timer.Tick += (_, _) => DrawCheck();
+        /* pointer input that reaches Uno's tree, for the lab's input tests */
+        if (Microsoft.UI.Xaml.Window.Current?.Content is { } top)
+        {
+            void Log(string what, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+            {
+                Microsoft.UI.Xaml.DependencyObject? o = e.OriginalSource as Microsoft.UI.Xaml.DependencyObject;
+                while (o != null && o is not Microsoft.UI.Xaml.Controls.Primitives.ButtonBase) o = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(o);
+                var button = o as Microsoft.UI.Xaml.Controls.Primitives.ButtonBase;
+                Ccw.Log($"pointer {what}: {(e.OriginalSource as Microsoft.UI.Xaml.FrameworkElement)?.GetType().Name} " +
+                        $"{(e.OriginalSource as Microsoft.UI.Xaml.FrameworkElement)?.Name} at {e.GetCurrentPoint(top).Position} handled {e.Handled}; " +
+                        (button == null ? "no button" : $"button {button.Name} enabled {button.IsEnabled} pressed {button.IsPressed} over {button.IsPointerOver} " +
+                         $"mode {button.ClickMode} command {button.Command?.GetType().Name ?? "null"} parameter {button.CommandParameter?.GetType().Name ?? "null"} " +
+                         $"data context {(button as Microsoft.UI.Xaml.FrameworkElement)?.DataContext?.GetType().Name ?? "null"} " +
+                         $"binding {(button.GetBindingExpression(Microsoft.UI.Xaml.Controls.Primitives.ButtonBase.CommandProperty) is { } cb ? "set, item " + (cb.DataItem?.GetType().Name ?? "null") + " path " + cb.ParentBinding?.Path?.Path : "none")}") +
+                        $"; pointer type {e.Pointer.PointerDeviceType} captured {e.Pointer.IsInContact}");
+            }
+            top.AddHandler(Microsoft.UI.Xaml.UIElement.PointerPressedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, e) => Log("pressed", e)), true);
+            top.AddHandler(Microsoft.UI.Xaml.UIElement.PointerReleasedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, e) => Log("released", e)), true);
+            top.AddHandler(Microsoft.UI.Xaml.UIElement.TappedEvent, new Microsoft.UI.Xaml.Input.TappedEventHandler((_, e) =>
+                Ccw.Log($"tapped: {(e.OriginalSource as Microsoft.UI.Xaml.FrameworkElement)?.GetType().Name} {(e.OriginalSource as Microsoft.UI.Xaml.FrameworkElement)?.Name}")), true);
+            top.AddHandler(Microsoft.UI.Xaml.UIElement.KeyDownEvent, new Microsoft.UI.Xaml.Input.KeyEventHandler((_, e) =>
+                Ccw.Log($"key down: {e.Key} from {(e.OriginalSource as Microsoft.UI.Xaml.FrameworkElement)?.GetType().Name}")), true);
+        }
+        timer.Interval = TimeSpan.FromSeconds(8);
+        timer.IsRepeating = true;
+        timer.Tick += (_, _) => { if (DrawCheck() >= 8) timer.Stop(); };
         timer.Start();
     }
 
@@ -277,8 +323,56 @@ public static unsafe class CoreWindowHost
         Ccw.Log($"draw check: window pixels saved to {path}");
     }
 
-    static void DrawCheck()
+    static int drawChecks;
+
+    [DllImport("user32.dll")] static extern int GetWindowRect(IntPtr hwnd, int* rect);
+    [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr hwnd);
+
+    static string Rects()
     {
+        int* a = stackalloc int[4];
+        int* b = stackalloc int[4];
+        _ = GetWindowRect(child, a);
+        _ = GetWindowRect(FrameworkView.CoreHwnd, b);
+        return $"window rects (screen): Uno {a[0]},{a[1]},{a[2]},{a[3]} CoreWindow {b[0]},{b[1]},{b[2]},{b[3]}; " +
+               $"parent of Uno {GetParent(child):x} (CoreWindow {FrameworkView.CoreHwnd:x}), style {(long)GetWindowLongPtrW(child, GWL_STYLE):x}";
+    }
+
+    [DllImport("user32.dll")] static extern int ClientToScreen(IntPtr hwnd, int* point);
+    [DllImport("user32.dll")] static extern int ScreenToClient(IntPtr hwnd, int* point);
+
+    /* where a window's client origin is on the screen, and what a screen point (100,100) is in its client area */
+    static string Origin(IntPtr hwnd)
+    {
+        int* p = stackalloc int[2];
+        p[0] = 0; p[1] = 0;
+        _ = ClientToScreen(hwnd, p);
+        var origin = $"{p[0]},{p[1]}";
+        p[0] = 100; p[1] = 100;
+        _ = ScreenToClient(hwnd, p);
+        return $"{origin} (screen 100,100 is {p[0]},{p[1]})";
+    }
+
+    /* the first text of the visual tree named NormalOutput (the Calculator's display) */
+    static string DisplayText()
+    {
+        string? found = null;
+        void Walk(Microsoft.UI.Xaml.DependencyObject o)
+        {
+            if (found != null) return;
+            if (o is Microsoft.UI.Xaml.Controls.TextBlock { Name: "NormalOutput" } tb) { found = tb.Text; return; }
+            int n = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(o);
+            for (int i = 0; i < n; i++) Walk(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(o, i));
+        }
+        if (Microsoft.UI.Xaml.Window.Current?.Content is { } content) Walk(content);
+        return found ?? "(none)";
+    }
+
+    /* runs every 8 s, the window's pixels saved as xamlshim-window-N.bmp and (the latest) xamlshim-window.bmp; the
+     * number of checks so far */
+    static int DrawCheck()
+    {
+        var n = ++drawChecks;
         int* r = stackalloc int[4];
         _ = GetClientRect(FrameworkView.CoreHwnd, r);
         var core = $"{r[2] - r[0]}x{r[3] - r[1]}";
@@ -292,14 +386,17 @@ public static unsafe class CoreWindowHost
                 var p = GetPixel(dc, x, y);
                 counts[p] = counts.GetValueOrDefault(p) + 1;
             }
+        SaveBitmap(dc, w, h, Path.Combine(Path.GetTempPath(), $"xamlshim-window-{n}.bmp"));
         SaveBitmap(dc, w, h, Path.Combine(Path.GetTempPath(), "xamlshim-window.bmp"));
         _ = ReleaseDC(child, dc);
         var colors = string.Join(", ", counts.OrderByDescending(c => c.Value).Take(6).Select(c => $"{c.Key:x6} x{c.Value}"));
         var content = Microsoft.UI.Xaml.Window.Current?.Content as Microsoft.UI.Xaml.FrameworkElement;
         var root = content?.XamlRoot;
-        Ccw.Log($"draw check: CoreWindow client {core}, Uno window {w}x{h} visible {IsWindowVisible(child)}; content " +
+        Ccw.Log($"draw check {n}: CoreWindow client {core}, Uno window {w}x{h} visible {IsWindowVisible(child)}; content " +
                 $"{content?.GetType().Name ?? "null"} {content?.ActualWidth}x{content?.ActualHeight} visibility {content?.Visibility}; " +
-                $"XamlRoot {root?.Size.Width}x{root?.Size.Height}; pixels {colors}");
+                $"XamlRoot {root?.Size.Width}x{root?.Size.Height}; display '{DisplayText()}'; origins: Uno window {Origin(child)}, " +
+                $"CoreWindow {Origin(FrameworkView.CoreHwnd)}; {Rects()}; pixels {colors}");
+        return n;
     }
 
     [DllImport("user32.dll")] static extern void PostQuitMessage(int code);
@@ -354,6 +451,29 @@ public static unsafe class CoreWindowHost
         int* r = stackalloc int[4];
         _ = GetClientRect(FrameworkView.CoreHwnd, r);
         _ = MoveWindow(child, 0, 0, r[2] - r[0], r[3] - r[1], 1);
+        if (Ccw.Tracing) Ccw.Log($"Fit: client {r[0]},{r[1]},{r[2]},{r[3]}; {Rects()}; origin {Origin(child)}");
+    }
+
+    static IntPtr childProc;
+    const uint WM_WINDOWPOSCHANGING = 0x0046;
+
+    /* Uno's window keeps its own idea of where it is (its position as a top-level window, taken as a position in the
+     * CoreWindow): every move or resize it asks for is made the whole client area of the CoreWindow */
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
+    static IntPtr ChildProc(IntPtr hwnd, uint msg, IntPtr w, IntPtr l)
+    {
+        if (msg == WM_WINDOWPOSCHANGING && l != IntPtr.Zero)
+        {
+            /* WINDOWPOS: hwnd, hwndInsertAfter, x, y, cx, cy, flags */
+            var wp = (int*)((byte*)l + 2 * sizeof(IntPtr));
+            int* r = stackalloc int[4];
+            if (GetClientRect(FrameworkView.CoreHwnd, r) != 0)
+            {
+                wp[0] = 0; wp[1] = 0; wp[2] = r[2] - r[0]; wp[3] = r[3] - r[1];
+                wp[4] &= ~(int)(SWP_NOMOVE | SWP_NOSIZE);
+            }
+        }
+        return CallWindowProcW(childProc, hwnd, msg, w, l);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]

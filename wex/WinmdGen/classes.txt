@@ -151,6 +151,14 @@ Windows.UI.Xaml.Markup.IComponentConnector2
 --interface
 Windows.UI.Xaml.Data.IValueConverter
 --interface
+Windows.UI.Xaml.Data.ICustomPropertyProvider
+--interface
+Windows.UI.Xaml.Data.ICustomProperty
+--interface
+Windows.UI.Xaml.Data.INotifyPropertyChanged
+--delegate
+Windows.UI.Xaml.Data.PropertyChangedEventHandler
+--interface
 Windows.UI.Xaml.Input.ICommand
 --class
 Windows.UI.Xaml.Controls.DataTemplateSelector

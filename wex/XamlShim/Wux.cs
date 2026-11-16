@@ -233,6 +233,7 @@ public unsafe partial class UI_Xaml_Application_Factory
         {
             try
             {
+                CoreWindowHost.MatchDpiAwareness();
                 XamlShim.UnoHostApp.Launched = () => Launch(callback);
                 var host = global::Uno.UI.Hosting.UnoPlatformHostBuilder.Create()
                     .App(() => new XamlShim.UnoHostApp())

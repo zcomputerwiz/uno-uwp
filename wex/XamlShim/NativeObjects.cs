@@ -52,6 +52,7 @@ public sealed unsafe class NativeCommand : System.Windows.Input.ICommand
         byte result;
         int hr = UI_Xaml_Input_ICommand_Call.CanExecute(Pointer, p, &result);
         if (p != IntPtr.Zero) Ccw.ComRelease(p);
+        if (Ccw.Tracing) Ccw.Log($"ICommand.CanExecute({parameter?.GetType().Name ?? "null"}): {hr:x8}, {result}");
         return hr >= 0 && result != 0;
     }
 
@@ -60,7 +61,7 @@ public sealed unsafe class NativeCommand : System.Windows.Input.ICommand
         var p = Boxing.Box(parameter);
         int hr = UI_Xaml_Input_ICommand_Call.Execute(Pointer, p);
         if (p != IntPtr.Zero) Ccw.ComRelease(p);
-        if (hr < 0) Ccw.Log($"ICommand.Execute: {hr:x8}");
+        if (hr < 0 || Ccw.Tracing) Ccw.Log($"ICommand.Execute({parameter?.GetType().Name ?? "null"}): {hr:x8}");
     }
 }
 

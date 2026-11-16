@@ -140,7 +140,10 @@ internal sealed unsafe class CcwState
 
     /* IInspectable has a block of its own, as on Windows, where the IInspectable of an element (an event's sender, an
      * object property) is not the pointer of its default interface: C++/CX compares such pointers directly */
-    public IntPtr Inspectable => Block(Ccw.IID_IInspectable, Ccw.InspectableVtbl);
+    /* Its table is the default interface's, though: .NET Native makes the RCW of an object it first met as an Object
+     * (an IComponentConnector.Connect target) from that pointer and later calls the class's members on it, as the
+     * default interface (the pointer of a C++ object's IInspectable is that of its first interface). */
+    public IntPtr Inspectable => Block(Ccw.IID_IInspectable, Table.Length > 0 ? Table[0].Vtbl : Ccw.InspectableVtbl);
 
     public int LocalQuery(Guid iid, IntPtr* result)
     {
@@ -159,7 +162,7 @@ internal sealed unsafe class CcwState
             Ccw.Trace($"QI {Managed.RuntimeClassName} {iid}: no interface");
             return unchecked((int)0x80004002);
         }
-        if (Ccw.Calls) Ccw.Log($"QI {Managed.RuntimeClassName} {iid}: ok");
+        if (Ccw.Calls) Ccw.Log($"QI {Managed.RuntimeClassName} {iid}: ok {*result:x}");
         /* COM aggregation: the reference goes where the returned pointer's Release will go, which for every block but
          * the non-delegating inner one is the outer object */
         if (Outer != IntPtr.Zero && *result != Inner) Ccw.ComAddRef(Outer);
@@ -265,7 +268,13 @@ public static unsafe class Ccw
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     static int GetIids(IntPtr block, uint* count, Guid** iids) { *count = 0; *iids = null; return 0; }
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    static int GetRuntimeClassName(IntPtr block, IntPtr* name) { *name = HString.Create(State(block).Managed.RuntimeClassName); return 0; }
+    static int GetRuntimeClassName(IntPtr block, IntPtr* name)
+    {
+        var className = State(block).Managed.RuntimeClassName;
+        if (Calls) Log($"GetRuntimeClassName {className}");
+        *name = HString.Create(className);
+        return 0;
+    }
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     static int GetTrustLevel(IntPtr block, int* level) { *level = 0; return 0; }
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]

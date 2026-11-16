@@ -345,7 +345,7 @@ public static unsafe partial class NativeControls
     public static IntPtr NativeOf(object self) => Native(self);
 
     /* the IXamlMember of an application type's member (AddRef'd), or zero */
-    static IntPtr XamlMember(string type, string member)
+    internal static IntPtr XamlMember(string type, string member)
     {
         var xamlType = XamlType(type);
         if (xamlType == IntPtr.Zero) return IntPtr.Zero;

@@ -87,11 +87,20 @@ static class NativeTypes
 }
 
 /* a native object that is not a shim: kept alive while Uno holds the value */
-sealed class NativeObject
+/* Uno binds ({Binding Path}) through .NET reflection and through System.Dynamic for the objects that have none: the
+ * members of the application's object are its ICustomPropertyProvider's (the C++/CX compiler makes every [Bindable]
+ * class one), as XAML on Windows reads them, and its INotifyPropertyChanged is Uno's. */
+sealed unsafe class NativeObject : System.Dynamic.DynamicObject, System.ComponentModel.INotifyPropertyChanged
 {
     public readonly IntPtr Pointer;
     /* the object's identity (its IUnknown): the same object read twice (a list's item) is equal */
     readonly IntPtr identity;
+    IntPtr provider;                                         /* ICustomPropertyProvider, AddRef'd, or zero */
+    bool providerKnown;
+    readonly Dictionary<string, IntPtr> properties = new();  /* ICustomProperty by name, AddRef'd, or zero */
+    System.ComponentModel.PropertyChangedEventHandler? changed;
+    bool subscribed;
+
     public NativeObject(IntPtr p)
     {
         Pointer = p;
@@ -99,9 +108,129 @@ sealed class NativeObject
         if (Ccw.QueryInterface(p, Ccw.IID_IUnknown, out var unknown) >= 0) { identity = unknown; Ccw.ComRelease(unknown); }
         else identity = p;
     }
-    ~NativeObject() { Ccw.ComRelease(Pointer); }   /* COM objects of these applications are free-threaded or agile */
+    ~NativeObject()
+    {
+        Ccw.ComRelease(Pointer);   /* COM objects of these applications are free-threaded or agile */
+        if (provider != IntPtr.Zero) Ccw.ComRelease(provider);
+        foreach (var p in properties.Values) if (p != IntPtr.Zero) Ccw.ComRelease(p);
+    }
     public override bool Equals(object? obj) => obj is NativeObject o && o.identity == identity;
     public override int GetHashCode() => identity.GetHashCode();
+
+    IntPtr Property(string name)
+    {
+        lock (properties)
+        {
+            if (properties.TryGetValue(name, out var known)) return known;
+            if (!providerKnown)
+            {
+                providerKnown = true;
+                if (Ccw.QueryInterface(Pointer, Iids.UI_Xaml_Data_ICustomPropertyProvider, out var p) >= 0) provider = p;
+            }
+            IntPtr property = IntPtr.Zero;
+            if (provider != IntPtr.Zero)
+            {
+                var h = HString.Create(name);
+                if (UI_Xaml_Data_ICustomPropertyProvider_Call.GetCustomProperty(provider, h, &property) < 0) property = IntPtr.Zero;
+                HString.Delete(h);
+            }
+            if (Ccw.Tracing) Ccw.Log($"native object {Pointer:x} property {name}: provider {provider:x}, property {property:x}");
+            return properties[name] = property;
+        }
+    }
+
+    /* the application's XAML metadata (its IXamlMetadataProvider) knows every [Bindable] type, the component's too: the
+     * member by the object's runtime class name, AddRef'd, or zero */
+    readonly Dictionary<string, IntPtr> members = new();
+    string? className;
+
+    IntPtr Member(string name)
+    {
+        lock (members)
+        {
+            if (members.TryGetValue(name, out var known)) return known;
+            if (className == null)
+            {
+                IntPtr h;
+                className = ((delegate* unmanaged[Stdcall]<IntPtr, IntPtr*, int>)(*(IntPtr**)Pointer)[4])(Pointer, &h) >= 0
+                    ? HString.Read(h) : "";
+                if (h != IntPtr.Zero) HString.Delete(h);
+            }
+            var member = className.Length > 0 ? NativeControls.XamlMember(className, name) : IntPtr.Zero;
+            if (Ccw.Tracing) Ccw.Log($"native object {Pointer:x} ({className}) member {name}: {member:x}");
+            return members[name] = member;
+        }
+    }
+
+    public override bool TryGetMember(System.Dynamic.GetMemberBinder binder, out object? result)
+    {
+        result = null;
+        if (Member(binder.Name) is var member && member != IntPtr.Zero)
+        {
+            IntPtr got;
+            int status = UI_Xaml_Markup_IXamlMember_Call.GetValue(member, Pointer, &got);
+            if (status < 0) { Ccw.Log($"binding {binder.Name}: GetValue {status:x8}"); return false; }
+            result = Boxing.Unbox(got);
+            if (got != IntPtr.Zero) Ccw.ComRelease(got);
+            return true;
+        }
+        var property = Property(binder.Name);
+        if (property == IntPtr.Zero) return false;
+        IntPtr value;
+        int hr = UI_Xaml_Data_ICustomProperty_Call.GetValue(property, Pointer, &value);
+        if (hr < 0) { Ccw.Log($"binding {binder.Name}: GetValue {hr:x8}"); return false; }
+        result = Boxing.Unbox(value);
+        if (value != IntPtr.Zero) Ccw.ComRelease(value);
+        return true;
+    }
+
+    public override bool TrySetMember(System.Dynamic.SetMemberBinder binder, object? value)
+    {
+        if (Member(binder.Name) is var member && member != IntPtr.Zero)
+        {
+            var b = Boxing.Box(value);
+            int status = UI_Xaml_Markup_IXamlMember_Call.SetValue(member, Pointer, b);
+            if (b != IntPtr.Zero) Ccw.ComRelease(b);
+            if (status < 0) { Ccw.Log($"binding {binder.Name}: SetValue {status:x8}"); return false; }
+            return true;
+        }
+        var property = Property(binder.Name);
+        if (property == IntPtr.Zero) return false;
+        var boxed = Boxing.Box(value);
+        int hr = UI_Xaml_Data_ICustomProperty_Call.SetValue(property, Pointer, boxed);
+        if (boxed != IntPtr.Zero) Ccw.ComRelease(boxed);
+        if (hr < 0) { Ccw.Log($"binding {binder.Name}: SetValue {hr:x8}"); return false; }
+        return true;
+    }
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged
+    {
+        add
+        {
+            changed += value;
+            if (subscribed) return;
+            subscribed = true;
+            if (Ccw.QueryInterface(Pointer, Iids.UI_Xaml_Data_INotifyPropertyChanged, out var notify) < 0) return;
+            var iid = Iids.UI_Xaml_Data_PropertyChangedEventHandler;
+            var handler = Ccw.Get(new NativeDelegate(iid, (_, args) =>
+            {
+                string name = "";
+                if (args != IntPtr.Zero && Ccw.QueryInterface(args, Iids.UI_Xaml_Data_IPropertyChangedEventArgs, out var e) >= 0)
+                {
+                    IntPtr h;
+                    if (UI_Xaml_Data_IPropertyChangedEventArgs_Call.get_PropertyName(e, &h) >= 0) { name = HString.Read(h); HString.Delete(h); }
+                    Ccw.ComRelease(e);
+                }
+                changed?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+            }), iid);
+            long token;
+            int hr = UI_Xaml_Data_INotifyPropertyChanged_Call.add_PropertyChanged(notify, handler, &token);
+            if (hr < 0) Ccw.Log($"INotifyPropertyChanged.PropertyChanged: {hr:x8}");
+            Ccw.ComRelease(handler);
+            Ccw.ComRelease(notify);
+        }
+        remove { changed -= value; }
+    }
 }
 
 /* the IInspectable that stands for DependencyProperty.UnsetValue */
