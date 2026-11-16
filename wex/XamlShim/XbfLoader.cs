@@ -396,8 +396,22 @@ public static unsafe class XbfLoader
         t.GetProperty(p + "Property", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.FlattenHierarchy) != null ||
         t.GetField(p + "Property", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.FlattenHierarchy) != null;
 
+    /* XbfKit writes the time spans of animations (KeyTime="0.367", Duration, BeginTime) as seconds; Uno reads a
+     * TimeSpan text */
+    static readonly string[] timeAttributes = ["KeyTime", "Duration", "BeginTime"];
+
+    internal static void FixTimeSpans(XElement root)
+    {
+        var c = System.Globalization.CultureInfo.InvariantCulture;
+        foreach (var e in root.DescendantsAndSelf())
+            foreach (var name in timeAttributes)
+                if (e.Attribute(name) is { } a && double.TryParse(a.Value, System.Globalization.NumberStyles.Float, c, out var seconds))
+                    a.Value = TimeSpan.FromSeconds(seconds).ToString("c", c);
+    }
+
     internal static void QualifyAttachedSetters(XElement root)
     {
+        FixTimeSpans(root);
         foreach (var setter in root.Descendants().Where(e => e.Name.LocalName == "Setter").ToList())
         {
             var a = setter.Attribute("Property");
