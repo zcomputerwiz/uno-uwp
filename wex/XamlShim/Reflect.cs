@@ -70,6 +70,37 @@ public static class Reflect
         return property.GetValue(target);
     }
 
+    /* an attached property through a statics interface: the Uno class's static GetX(element) or SetX(element, value) */
+    static MethodInfo? Accessor(object shim, string name)
+    {
+        var factory = (ShimFactory)shim;
+        var method = ShimFactory.UnoTypeOf(factory.ClassName)?.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy)
+            .FirstOrDefault(m => m.Name == name && m.GetParameters().Length == (name.StartsWith("Get", StringComparison.Ordinal) ? 1 : 2));
+        if (method == null) Ccw.NotImplemented($"{factory.ClassName}.{name} (no Uno static method)");
+        return method;
+    }
+
+    public static object? GetAttached(object shim, string name, IntPtr element)
+    {
+        var method = Accessor(shim, "Get" + name);
+        var target = Boxing.Unbox(element);
+        if (method == null || target == null) return null;
+        return method.Invoke(null, [target]);
+    }
+
+    public static void SetAttached(object shim, string name, IntPtr element, object? value)
+    {
+        var method = Accessor(shim, "Set" + name) ?? throw new NotImplementedException();
+        var target = Boxing.Unbox(element) ?? throw new ArgumentNullException(nameof(element));
+        var type = method.GetParameters()[1].ParameterType;
+        type = Nullable.GetUnderlyingType(type) ?? type;
+        if (value != null && !type.IsInstanceOfType(value))
+            value = type.IsEnum ? Enum.ToObject(type, Convert.ToInt64(value, CultureInfo.InvariantCulture))
+                  : value.GetType().IsValueType && !value.GetType().IsPrimitive && type.IsValueType ? StructConvert.ToUno(value, type)
+                  : Convert.ChangeType(value, type, CultureInfo.InvariantCulture);
+        method.Invoke(null, [target, value]);
+    }
+
     public static long GetInteger(object shim, string name) => Convert.ToInt64(Get(shim, name), CultureInfo.InvariantCulture);
 
     /* struct properties: the ABI struct and Uno's struct of the same shape, member by member (StructConvert) */

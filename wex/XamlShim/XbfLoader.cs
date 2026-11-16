@@ -39,6 +39,7 @@ public static unsafe class XbfLoader
             var n = e.Attribute(X + "Name")?.Value;
             if (n == null) { n = "__connection" + id.Value; e.SetAttributeValue(X + "Name", n); }
             connections.Add((n, int.Parse(id.Value, System.Globalization.CultureInfo.InvariantCulture)));
+            e.SetAttributeValue(shimNamespace + "XamlConnection.Id", id.Value);
             id.Remove();
         }
         int? rootConnection = null;
@@ -56,24 +57,31 @@ public static unsafe class XbfLoader
         }
         if (content.Count > 1) Ccw.Log($"{content.Count} content elements: only the first is loaded");
         ApplyRootAttributes(top, shim.UnoObject);
-
-        /* the root's own resources (<Page.Resources>): the element's Resources, before its content is read, so that
-         * the content's resources and the application's code (x:Bind converters) find them */
-        if (top.Elements().FirstOrDefault(e => e.Name.LocalName.EndsWith(".Resources", StringComparison.Ordinal)) is { } resources &&
-            shim.UnoObject is Mux.FrameworkElement owner)
+        /* the connected objects of the root's resources and of its content (a menu flyout in the resources) */
+        var scope = XamlConnection.Begin();
+        var connected = scope.Objects;
+        Mux.UIElement built;
+        try
         {
-            var entries = resources.Elements().Select(e => new XElement(e)).ToList();
-            if (entries.Count > 0) owner.Resources = BuildDictionary(top, entries, Path.GetFileNameWithoutExtension(relative));
-        }
+            /* the root's own resources (<Page.Resources>): the element's Resources, before its content is read, so
+             * that the content's resources and the application's code (x:Bind converters) find them */
+            if (top.Elements().FirstOrDefault(e => e.Name.LocalName.EndsWith(".Resources", StringComparison.Ordinal)) is { } resources &&
+                shim.UnoObject is Mux.FrameworkElement owner)
+            {
+                var entries = resources.Elements().Select(e => new XElement(e)).ToList();
+                if (entries.Count > 0) owner.Resources = BuildDictionary(top, entries, Path.GetFileNameWithoutExtension(relative));
+            }
 
-        var element = new XElement(content[0]);
-        foreach (var ns in top.Attributes().Where(a => a.IsNamespaceDeclaration)) element.SetAttributeValue(ns.Name, ns.Value);
-        ResolveConditionalNamespaces(element);
-        NativeControls.Prepare(element);
-        QualifyTargetTypes(element);
-        QualifyAttachedSetters(element);
-        AliasResources(element);
-        var built = (Mux.UIElement)Mux.Markup.XamlReader.Load(element.ToString());
+            var element = new XElement(content[0]);
+            foreach (var ns in top.Attributes().Where(a => a.IsNamespaceDeclaration)) element.SetAttributeValue(ns.Name, ns.Value);
+            ResolveConditionalNamespaces(element);
+            NativeControls.Prepare(element);
+            QualifyTargetTypes(element);
+            QualifyAttachedSetters(element);
+            AliasResources(element);
+            built = (Mux.UIElement)Mux.Markup.XamlReader.Load(element.ToString());
+        }
+        finally { scope.Dispose(); }
 
         switch (shim.UnoObject)
         {
@@ -106,7 +114,9 @@ public static unsafe class XbfLoader
         }
         foreach (var (n, id) in connections)
         {
-            var found = (built as Mux.FrameworkElement)?.FindName(n);
+            /* recorded while built, in the visual tree, or a named entry of the root's resources (a storyboard) */
+            var found = connected.TryGetValue(id, out var o) ? o : (built as Mux.FrameworkElement)?.FindName(n);
+            if (found == null && shim.UnoObject is Mux.FrameworkElement rootElement && rootElement.Resources.TryGetValue(n, out var r)) found = r;
             if (found == null) { Ccw.Log($"connection {id}: {n} not found"); continue; }
             var wrapper = Shim.For(found);
             var p = Ccw.Get(wrapper);

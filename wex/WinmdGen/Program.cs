@@ -458,7 +458,7 @@ sealed class Generator
                              ps[1].Name == "@innerInterface" && ps[2].Name == "result";
             var body = composable
                 ? "=> ShimFactory.ComposeDefault(this, @baseInterface, @innerInterface, result);"
-                : PropertyBody(mname, ps) ?? EventBody(mname, ps) ??
+                : PropertyBody(mname, ps) ?? EventBody(mname, ps) ?? AttachedBody(mname, ps) ??
                   $"{{ Ccw.NotImplemented(\"{name}.{mname}\"); return unchecked((int)0x80004001); }}";
             s.AppendLine($"    int {mname}({string.Join(", ", ps.Select(p => p.Decl))}) {body}");
         }
@@ -532,6 +532,43 @@ sealed class Generator
                 "struct" => $"{{ Reflect.SetStruct(this, \"{prop}\", @value); return 0; }}",
                 _ => null,
             };
+        return null;
+    }
+
+    /* a default body for an attached property of a statics interface (AutomationProperties.SetName(element, value),
+     * GetName(element)): the Uno class's static SetX or GetX (Reflect, XamlShim) */
+    static string? AttachedBody(string mname, List<(string Decl, string Name, AbiType? Type)> ps)
+    {
+        if (ps.Count != 2 || ps[0].Type is not { Kind: "object" } || ps[1].Type is not { } t || mname.Length < 4) return null;
+        var prop = mname[3..];
+        if (mname.StartsWith("Get") && ps[1].Name == "result")
+        {
+            var get = $"Reflect.GetAttached(this, \"{prop}\", {ps[0].Name})";
+            return t.Kind switch
+            {
+                "string" => $"{{ *result = HString.Create((string?){get} ?? \"\"); return 0; }}",
+                "bool" => $"{{ *result = (byte)({get} is true ? 1 : 0); return 0; }}",
+                "prim" => $"{{ *result = ({t.Cs})System.Convert.ChangeType({get}!, typeof({t.Cs}), System.Globalization.CultureInfo.InvariantCulture); return 0; }}",
+                "enum" => $"{{ *result = unchecked(({t.Cs})System.Convert.ToInt64({get}, System.Globalization.CultureInfo.InvariantCulture)); return 0; }}",
+                "object" => $"{{ *result = Boxing.Box({get}); return 0; }}",
+                "struct" => $"{{ *result = {get} is {{ }} v__ ? ({t.Cs})StructConvert.ToAbi(v__, typeof({t.Cs})) : default; return 0; }}",
+                _ => null,
+            };
+        }
+        if (mname.StartsWith("Set") && ps[1].Name == "@value")
+        {
+            var value = t.Kind switch
+            {
+                "string" => "HString.Read(@value)",
+                "bool" => "@value != 0",
+                "prim" => "@value",
+                "enum" => "(long)@value",
+                "object" => "Boxing.Unbox(@value)",
+                "struct" => "@value",
+                _ => null,
+            };
+            return value == null ? null : $"{{ Reflect.SetAttached(this, \"{prop}\", {ps[0].Name}, {value}); return 0; }}";
+        }
         return null;
     }
 

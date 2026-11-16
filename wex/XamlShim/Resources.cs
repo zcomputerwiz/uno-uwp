@@ -69,6 +69,7 @@ public sealed unsafe partial class UI_Xaml_ResourceDictionary
             return unchecked((int)0x8000000B);   /* E_BOUNDS */
         }
         *value = Boxing.Box(v);
+        if (Ccw.Calls) Ccw.Log($"ResourceDictionary.Lookup {k}: {v?.GetType().FullName}");
         return 0;
     });
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]

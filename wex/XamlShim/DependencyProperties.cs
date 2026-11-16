@@ -255,6 +255,16 @@ public unsafe partial class UI_Xaml_PropertyMetadata_Factory
         Make(IntPtr.Zero, changed, create, IntPtr.Zero, null, result);
 }
 
+/* new PropertyPath(path): Uno's PropertyPath of that path */
+public unsafe partial class UI_Xaml_PropertyPath_Factory
+{
+    int IUI_Xaml_IPropertyPathFactory_Abi.CreateInstance(IntPtr path, IntPtr* result)
+    {
+        *result = Ccw.Get(Shim.For(new Mux.PropertyPath(HString.Read(path))), Iids.UI_Xaml_IPropertyPath);
+        return 0;
+    }
+}
+
 // ---- DependencyProperty ----
 
 public unsafe partial class UI_Xaml_DependencyProperty

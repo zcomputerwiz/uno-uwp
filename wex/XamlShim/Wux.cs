@@ -424,6 +424,26 @@ public unsafe partial class UI_Xaml_FrameworkElement
 
     int IUI_Xaml_IFrameworkElement_Abi.get_ActualWidth(double* result) { *result = Fe.ActualWidth; return 0; }
     int IUI_Xaml_IFrameworkElement_Abi.get_ActualHeight(double* result) { *result = Fe.ActualHeight; return 0; }
+
+    int IUI_Xaml_IFrameworkElement_Abi.SetBinding(IntPtr dp, IntPtr binding)
+    {
+        if (Shim.UnoOf(binding) is not Mux.Data.BindingBase b) return unchecked((int)0x80070057);   /* E_INVALIDARG */
+        Fe.SetBinding(DependencyProperties.Of(dp).Uno, b);
+        return 0;
+    }
+}
+
+/* a state trigger of the application (derived from StateTriggerBase) sets its state through the protected SetActive */
+public unsafe partial class UI_Xaml_StateTriggerBase
+{
+    static readonly System.Reflection.MethodInfo setActive = typeof(Mux.StateTriggerBase).GetMethod("SetActive",
+        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic, [typeof(bool)])!;
+
+    int IUI_Xaml_IStateTriggerBaseProtected_Abi.SetActive(byte isActive)
+    {
+        setActive.Invoke(UnoObject, [isActive != 0]);
+        return 0;
+    }
 }
 
 public unsafe partial class UI_Xaml_Media_GeneralTransform
