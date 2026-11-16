@@ -231,7 +231,7 @@ public static unsafe class CoreWindowHost
         var queue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
         var timer = queue?.CreateTimer();
         if (timer == null) { Ccw.Log("draw check: no dispatcher queue"); return; }
-        timer.Interval = TimeSpan.FromSeconds(5);
+        timer.Interval = TimeSpan.FromSeconds(10);
         timer.IsRepeating = false;
         timer.Tick += (_, _) => DrawCheck();
         timer.Start();

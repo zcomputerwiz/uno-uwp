@@ -435,6 +435,7 @@ public unsafe partial class UI_Xaml_Window
         {
             null => "null",
             string s => "'" + (s.Length > 20 ? s[..20] + "..." : s) + "'",
+            Mux.Media.SolidColorBrush b => $"#{b.Color.A:X2}{b.Color.R:X2}{b.Color.G:X2}{b.Color.B:X2}" + (b.Opacity < 1 ? $"@{b.Opacity:0.##}" : ""),
             _ => v.GetType().Name is var n && v.ToString() is { } t && t != v.GetType().FullName ? (t.Length > 20 ? t[..20] : t) : v.GetType().Name,
         };
         /* the tree once the application's first view is up (its content is navigated to after OnLaunched) */
@@ -448,7 +449,8 @@ public unsafe partial class UI_Xaml_Window
                     Ccw.Log($"tree {new string(' ', depth * 2)}{fe.GetType().Name}" + (string.IsNullOrEmpty(fe.Name) ? "" : $" {fe.Name}") +
                             $" {fe.ActualWidth:0}x{fe.ActualHeight:0}" + (fe.Visibility != Mux.Visibility.Visible ? " collapsed" : "") +
                             (fe.Opacity < 1 ? $" opacity {fe.Opacity:0.##}" : "") + (fe.IsLoaded ? "" : " not loaded") +
-                            (fe is Microsoft.UI.Xaml.Controls.TextBlock tb ? $" text '{tb.Text}' size {tb.FontSize} font {tb.FontFamily?.Source}" +
+                            (fe is Microsoft.UI.Xaml.Controls.Control ctl && !ctl.IsEnabled ? " disabled" : "") +
+                            (fe is Microsoft.UI.Xaml.Controls.TextBlock tb ? $" text '{tb.Text}' size {tb.FontSize} font {tb.FontFamily?.Source} fg {Short(tb.Foreground)}" +
                                 (tb.GetBindingExpression(Microsoft.UI.Xaml.Controls.TextBlock.TextProperty) is { } be
                                     ? $" bound {be.ParentBinding?.Path?.Path} source {be.DataItem?.GetType().Name ?? "null"}" +
                                       $" relative {be.ParentBinding?.RelativeSource?.Mode}" : "") : "") +

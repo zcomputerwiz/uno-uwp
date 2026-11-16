@@ -29,6 +29,7 @@ public static unsafe partial class XbfLoader
         var xbf = ReadXbf(relative);
         if (xbf == null) return unchecked((int)0x80070002);
         var top = Decompile(xbf).Root!;
+        if (Ccw.Calls) File.WriteAllText(Path.Combine(Path.GetTempPath(), "xamlshim-" + Path.GetFileNameWithoutExtension(relative) + ".xaml"), top.ToString());
 
         /* connection IDs: named elements keep their names, others get one */
         var connections = new List<(string Name, int Id)>();
@@ -80,7 +81,9 @@ public static unsafe partial class XbfLoader
             QualifyTargetTypes(element);
             QualifyAttachedSetters(element);
             AliasResources(element);
-            built = (Mux.UIElement)Mux.Markup.XamlReader.Load(element.ToString());
+            if (top.Attribute(X + "Name")?.Value is { Length: > 0 } rootName) RootBinding.Rewrite(element, rootName, shimNamespace);
+            using (RootBinding.Begin(shim.UnoObject))
+                built = (Mux.UIElement)Mux.Markup.XamlReader.Load(element.ToString());
         }
         finally { scope.Dispose(); }
 
@@ -137,6 +140,9 @@ public static unsafe partial class XbfLoader
     static void ApplyRootAttributes(XElement top, object? target)
     {
         if (target == null) return;
+        /* x:Name of the root (NumberPad's ControlRoot): the content refers to it ({Binding ElementName=ControlRoot}) */
+        if (top.Attribute(X + "Name")?.Value is { Length: > 0 } rootName && target is Mux.FrameworkElement named && string.IsNullOrEmpty(named.Name))
+            named.Name = rootName;
         foreach (var a in top.Attributes().Where(a => !a.IsNamespaceDeclaration && a.Name.Namespace == XNamespace.None))
         {
             var name = a.Name.LocalName;
