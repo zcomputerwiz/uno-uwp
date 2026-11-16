@@ -146,3 +146,5 @@ Windows.UI.Xaml.Controls.MenuFlyout
 Windows.UI.Xaml.Controls.MenuFlyoutItemBase
 --class
 Windows.UI.Xaml.Controls.MenuFlyoutItem
+--class
+Windows.UI.Xaml.Navigation.NavigationEventArgs

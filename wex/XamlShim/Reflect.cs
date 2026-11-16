@@ -67,7 +67,14 @@ public static class Reflect
         }
         if (Stored(shim, name, out var values)) return values.TryGetValue(name, out var v) ? v : null;
         var (target, property) = Find(shim, name);
-        return property.GetValue(target);
+        var result = property.GetValue(target);
+        if (Ccw.Calls && name == "DataContext")
+        {
+            var parent = (target as Microsoft.UI.Xaml.FrameworkElement)?.Parent;
+            Ccw.Log($"get {target.GetType().FullName} {(target as Microsoft.UI.Xaml.FrameworkElement)?.Name}.DataContext: {result?.GetType().FullName ?? "null"}" +
+                    $" (parent {parent?.GetType().FullName ?? "none"}, loaded {(target as Microsoft.UI.Xaml.FrameworkElement)?.IsLoaded})");
+        }
+        return result;
     }
 
     /* an attached property through a statics interface: the Uno class's static GetX(element) or SetX(element, value) */
@@ -132,6 +139,7 @@ public static class Reflect
         if (value != null && !type.IsInstanceOfType(value))
             value = type.IsEnum ? Enum.ToObject(type, Convert.ToInt64(value, CultureInfo.InvariantCulture))
                                 : Convert.ChangeType(value, type, CultureInfo.InvariantCulture);
+        if (Ccw.Calls && name == "DataContext") Ccw.Log($"set {target.GetType().FullName} {(target as Microsoft.UI.Xaml.FrameworkElement)?.Name}.DataContext = {value?.GetType().FullName ?? "null"}");
         property.SetValue(target, value);
     }
 }

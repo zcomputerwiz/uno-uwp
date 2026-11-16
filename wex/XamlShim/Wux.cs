@@ -521,6 +521,47 @@ public unsafe partial class UI_Xaml_Controls_UserControl
 
 // ---- Frame and Page ----
 
+/* the arguments of a navigation (Frame.Navigate to a new page): the page, the parameter, the page's type; no Uno object */
+public unsafe partial class UI_Xaml_Navigation_NavigationEventArgs
+{
+    readonly IntPtr content, parameter;
+    readonly string pageType;
+    readonly int pageKind;
+
+    public UI_Xaml_Navigation_NavigationEventArgs() : this(IntPtr.Zero, IntPtr.Zero, "", 0) { }
+
+    internal UI_Xaml_Navigation_NavigationEventArgs(IntPtr content, IntPtr parameter, string pageType, int pageKind)
+    {
+        this.content = content;
+        this.parameter = parameter;
+        this.pageType = pageType;
+        this.pageKind = pageKind;
+        if (content != IntPtr.Zero) Ccw.ComAddRef(content);
+        if (parameter != IntPtr.Zero) Ccw.ComAddRef(parameter);
+    }
+
+    ~UI_Xaml_Navigation_NavigationEventArgs()
+    {
+        if (content != IntPtr.Zero) Ccw.ComRelease(content);
+        if (parameter != IntPtr.Zero) Ccw.ComRelease(parameter);
+    }
+
+    static IntPtr AddRefed(IntPtr p) { if (p != IntPtr.Zero) Ccw.ComAddRef(p); return p; }
+
+    int IUI_Xaml_Navigation_INavigationEventArgs_Abi.get_Content(IntPtr* result) { *result = AddRefed(content); return 0; }
+    int IUI_Xaml_Navigation_INavigationEventArgs_Abi.get_Parameter(IntPtr* result) { *result = AddRefed(parameter); return 0; }
+    int IUI_Xaml_Navigation_INavigationEventArgs_Abi.get_SourcePageType(TypeName* result)
+    {
+        result->Name = HString.Create(pageType);
+        result->Kind = pageKind;
+        return 0;
+    }
+    int IUI_Xaml_Navigation_INavigationEventArgs_Abi.get_NavigationMode(int* result) { *result = 0; return 0; }   /* New */
+    int IUI_Xaml_Navigation_INavigationEventArgs_Abi.get_Uri(IntPtr* result) { *result = IntPtr.Zero; return 0; }
+    int IUI_Xaml_Navigation_INavigationEventArgs_Abi.put_Uri(IntPtr value) => 0;
+    int IUI_Xaml_Navigation_INavigationEventArgs2_Abi.get_NavigationTransitionInfo(IntPtr* result) { *result = IntPtr.Zero; return 0; }
+}
+
 public unsafe partial class UI_Xaml_Controls_Frame
 {
     /* Navigate(TypeName, parameter): the page comes from the application's own metadata provider */
@@ -548,6 +589,17 @@ public unsafe partial class UI_Xaml_Controls_Frame
         var frame = (UnoControls.ContentControl)UnoObject!;
         if (frame.Content != null) backStackDepth++;        /* the back stack keeps the page type; navigation back is not done */
         frame.Content = page;
+
+        /* the page's OnNavigatedTo (its IPageOverrides), after it became the frame's content, as on Windows */
+        if (Ccw.QueryInterface(instance, Iids.UI_Xaml_Controls_IPageOverrides, out var overrides) >= 0)
+        {
+            var args = new UI_Xaml_Navigation_NavigationEventArgs(instance, parameter, name, type.Kind);
+            var a = Ccw.Get(args, Iids.UI_Xaml_Navigation_INavigationEventArgs);
+            int nhr = UI_Xaml_Controls_IPageOverrides_Call.OnNavigatedTo(overrides, a);
+            Ccw.Log($"OnNavigatedTo {name}: {nhr:x8}");
+            Ccw.ComRelease(a);
+            Ccw.ComRelease(overrides);
+        }
         *result = 1;
         return 0;
     }
