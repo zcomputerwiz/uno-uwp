@@ -431,6 +431,12 @@ public unsafe partial class UI_Xaml_Window
             embed.Start();
         }
         if (!Ccw.Tracing) return 0;
+        static string Short(object? v) => v switch
+        {
+            null => "null",
+            string s => "'" + (s.Length > 20 ? s[..20] + "..." : s) + "'",
+            _ => v.GetType().Name is var n && v.ToString() is { } t && t != v.GetType().FullName ? (t.Length > 20 ? t[..20] : t) : v.GetType().Name,
+        };
         /* the tree once the application's first view is up (its content is navigated to after OnLaunched) */
         var timer = new Mux.DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
         timer.Tick += (s, e) =>
@@ -442,7 +448,13 @@ public unsafe partial class UI_Xaml_Window
                     Ccw.Log($"tree {new string(' ', depth * 2)}{fe.GetType().Name}" + (string.IsNullOrEmpty(fe.Name) ? "" : $" {fe.Name}") +
                             $" {fe.ActualWidth:0}x{fe.ActualHeight:0}" + (fe.Visibility != Mux.Visibility.Visible ? " collapsed" : "") +
                             (fe.Opacity < 1 ? $" opacity {fe.Opacity:0.##}" : "") + (fe.IsLoaded ? "" : " not loaded") +
-                            (fe is Microsoft.UI.Xaml.Controls.TextBlock tb ? $" text '{tb.Text}' size {tb.FontSize} font {tb.FontFamily?.Source}" : "") +
+                            (fe is Microsoft.UI.Xaml.Controls.TextBlock tb ? $" text '{tb.Text}' size {tb.FontSize} font {tb.FontFamily?.Source}" +
+                                (tb.GetBindingExpression(Microsoft.UI.Xaml.Controls.TextBlock.TextProperty) is { } be
+                                    ? $" bound {be.ParentBinding?.Path?.Path} source {be.DataItem?.GetType().Name ?? "null"}" +
+                                      $" relative {be.ParentBinding?.RelativeSource?.Mode}" : "") : "") +
+                            /* the values of the properties the application registered for this element's type */
+                            string.Concat(DependencyProperties.Registered.Where(r => r.Key.Owner.IsInstanceOfType(fe))
+                                .Select(r => $" {r.Key.Name}={Short(fe.GetValue(r.Value))}")) +
                             (fe is Microsoft.UI.Xaml.Controls.ContentControl cc0 ? $" content {cc0.Content?.GetType().Name ?? "null"}" :
                              fe is Microsoft.UI.Xaml.Controls.ContentPresenter cp0 ? $" content {cp0.Content?.GetType().Name ?? "null"}" : "") +
                             /* what sizes a control that came out flat */

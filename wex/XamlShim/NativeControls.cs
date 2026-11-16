@@ -33,6 +33,31 @@ public static unsafe partial class NativeControls
     static readonly MethodInfo provideValue = typeof(NativeControls).GetMethod(nameof(ProvideValue))!;
     static readonly MethodInfo findProperty = typeof(NativeControls).GetMethod(nameof(FindProperty))!;
     static readonly MethodInfo setText = typeof(NativeControls).GetMethod(nameof(SetText))!;
+    static readonly MethodInfo applyingTemplate = typeof(NativeControls).GetMethod(nameof(ApplyingTemplate))!;
+    static readonly MethodInfo applyTemplate = typeof(NativeControls).GetMethod(nameof(ApplyTemplate))!;
+    static readonly ConditionalWeakTable<object, object> inApply = new();
+
+    /* true while the application's OnApplyTemplate runs for this element (its call to the base is Uno's) */
+    public static bool ApplyingTemplate(object self) => inApply.TryGetValue(self, out _);
+
+    /* the application's OnApplyTemplate for a stand-in; false when it has none to call */
+    public static bool ApplyTemplate(object self)
+    {
+        var native = Native(self);
+        if (native == IntPtr.Zero || Ccw.QueryInterface(native, Iids.UI_Xaml_IFrameworkElementOverrides, out var overrides) < 0) return false;
+        inApply.AddOrUpdate(self, self);
+        try
+        {
+            int hr = UI_Xaml_IFrameworkElementOverrides_Call.OnApplyTemplate(overrides);
+            if (hr < 0) Ccw.Log($"OnApplyTemplate of {self.GetType().FullName}: {hr:x8}");
+            return true;
+        }
+        finally
+        {
+            inApply.Remove(self);
+            Ccw.ComRelease(overrides);
+        }
+    }
     static readonly HashSet<string> initialized = new();
 
     /* the dependency property an application type registered under a name (it or a base), or null; asking the
@@ -269,6 +294,31 @@ public static unsafe partial class NativeControls
                 property.SetSetMethod(set);
                 builder.SetCustomAttribute(new CustomAttributeBuilder(contentAttribute.GetConstructor(Type.EmptyTypes)!, [],
                                                                       [nameField], [text]));
+            }
+
+            /* OnApplyTemplate: the application's override (IFrameworkElementOverrides), which finds its template parts;
+             * its call to the base comes back here and runs Uno's */
+            var unoApply = unoBase.GetMethod("OnApplyTemplate", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                                             Type.EmptyTypes);
+            if (unoApply != null && unoApply.IsVirtual && !unoApply.IsFinal && (unoApply.IsFamily || unoApply.IsPublic || unoApply.IsFamilyOrAssembly))
+            {
+                var attributes = (unoApply.IsPublic ? MethodAttributes.Public : MethodAttributes.Family) | MethodAttributes.Virtual | MethodAttributes.HideBySig;
+                var apply = builder.DefineMethod("OnApplyTemplate", attributes, typeof(void), Type.EmptyTypes);
+                var a = apply.GetILGenerator();
+                var runBase = a.DefineLabel();
+                var done = a.DefineLabel();
+                a.Emit(OpCodes.Ldarg_0);
+                a.Emit(OpCodes.Call, applyingTemplate);
+                a.Emit(OpCodes.Brtrue, runBase);          /* the application's base call: Uno's */
+                a.Emit(OpCodes.Ldarg_0);
+                a.Emit(OpCodes.Call, applyTemplate);
+                a.Emit(OpCodes.Brtrue, done);             /* the application's override ran */
+                a.MarkLabel(runBase);
+                a.Emit(OpCodes.Ldarg_0);
+                a.Emit(OpCodes.Call, unoApply);
+                a.MarkLabel(done);
+                a.Emit(OpCodes.Ret);
+                builder.DefineMethodOverride(apply, unoApply);
             }
 
             /* a markup extension's value comes from the application's ProvideValue */

@@ -122,11 +122,13 @@ public static class Reflect
         }
         else
         {
+            /* protected members too: an application's control calls them on its base (GetTemplateChild, OnApplyTemplate) */
             target = ((ShimObject)shim).UnoObject;
             type = target?.GetType();
-            flags |= BindingFlags.Instance;
+            flags |= BindingFlags.Instance | BindingFlags.NonPublic;
         }
-        var candidates = type?.GetMethods(flags).Where(m => m.Name == name && m.GetParameters().Length == args.Length).ToList() ?? [];
+        var candidates = type?.GetMethods(flags).Where(m => m.Name == name && m.GetParameters().Length == args.Length &&
+                                                            (m.IsPublic || m.IsFamily || m.IsFamilyOrAssembly)).ToList() ?? [];
         var method = candidates.FirstOrDefault(m => m.GetParameters().Zip(args).All(p => p.Second == null || Accepts(p.First.ParameterType, p.Second)))
                      ?? candidates.FirstOrDefault();
         /* a factory's CreateInstance... (not composable): Uno's constructor with those parameters */
