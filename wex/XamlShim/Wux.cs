@@ -211,6 +211,19 @@ public unsafe partial class UI_Xaml_Application_Factory
     /* as on Windows: CoreApplication.Run with the shim's view source; the view's Run runs the Uno host on the view's
      * thread. Without a CoreApplication (Run refused: not packaged, wrong apartment), the host runs on a thread of its
      * own as before. */
+    /* XAMLSHIM_RENDER=software|opengl|vulkan forces Uno's rendering backend (diagnostics); unset, Uno negotiates */
+    static void ChooseRenderer(global::Uno.UI.Hosting.Win32HostBuilder b)
+    {
+        var forced = Environment.GetEnvironmentVariable("XAMLSHIM_RENDER")?.ToLowerInvariant() switch
+        {
+            "software" => global::Uno.UI.Hosting.Win32RenderingBackend.Software,
+            "opengl" => global::Uno.UI.Hosting.Win32RenderingBackend.OpenGL,
+            "vulkan" => global::Uno.UI.Hosting.Win32RenderingBackend.Vulkan,
+            _ => (global::Uno.UI.Hosting.Win32RenderingBackend?)null,
+        };
+        if (forced is { } f) { b.ForceRenderingBackend(f); Ccw.Log($"rendering backend forced: {f}"); }
+    }
+
     int IUI_Xaml_IApplicationStatics_Abi.Start(IntPtr callback)
     {
         Ccw.Log("Application.Start");
@@ -223,7 +236,7 @@ public unsafe partial class UI_Xaml_Application_Factory
                 XamlShim.UnoHostApp.Launched = () => Launch(callback);
                 var host = global::Uno.UI.Hosting.UnoPlatformHostBuilder.Create()
                     .App(() => new XamlShim.UnoHostApp())
-                    .UseWin32()
+                    .UseWin32(ChooseRenderer)
                     .Build();
                 host.Run();
                 Ccw.Log("Uno host returned");

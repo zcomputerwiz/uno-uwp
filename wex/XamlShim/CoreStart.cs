@@ -215,7 +215,91 @@ public static unsafe class CoreWindowHost
         SetFocus(child);
         int hr = UI_Core_ICoreWindow_Call.Activate(FrameworkView.CoreWindow);
         Ccw.Log($"Uno window {child:x} placed in the CoreWindow {core:x} ({found.Count} candidates), CoreWindow.Activate {hr:x8}");
+        ScheduleDrawCheck();
         return true;
+    }
+
+    [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr hwnd, IntPtr dc);
+    [DllImport("gdi32.dll")] static extern uint GetPixel(IntPtr dc, int x, int y);
+
+    /* diagnostics, once, 5 s after the window is placed: the windows' sizes, the root element's layout and what the
+     * child window's pixels hold (read back through GDI: an X screenshot does not show every surface) */
+    static void ScheduleDrawCheck()
+    {
+        if (Environment.GetEnvironmentVariable("XAMLSHIM_TRACE") != "1") return;
+        var queue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+        var timer = queue?.CreateTimer();
+        if (timer == null) { Ccw.Log("draw check: no dispatcher queue"); return; }
+        timer.Interval = TimeSpan.FromSeconds(5);
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) => DrawCheck();
+        timer.Start();
+    }
+
+    [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr dc, byte* info, uint usage, void** bits, IntPtr section, uint offset);
+    [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
+    [DllImport("gdi32.dll")] static extern int BitBlt(IntPtr dst, int x, int y, int w, int h, IntPtr src, int sx, int sy, uint rop);
+    [DllImport("gdi32.dll")] static extern int DeleteObject(IntPtr obj);
+    [DllImport("gdi32.dll")] static extern int DeleteDC(IntPtr dc);
+
+    /* the window's pixels as a 32-bit top-down BMP file */
+    static void SaveBitmap(IntPtr dc, int w, int h, string path)
+    {
+        if (w <= 0 || h <= 0) return;
+        var info = new byte[40];
+        BitConverter.TryWriteBytes(info.AsSpan(0), 40);
+        BitConverter.TryWriteBytes(info.AsSpan(4), w);
+        BitConverter.TryWriteBytes(info.AsSpan(8), -h);
+        BitConverter.TryWriteBytes(info.AsSpan(12), (short)1);
+        BitConverter.TryWriteBytes(info.AsSpan(14), (short)32);
+        void* bits;
+        IntPtr mem = CreateCompatibleDC(dc), dib;
+        fixed (byte* p = info) dib = CreateDIBSection(dc, p, 0, &bits, IntPtr.Zero, 0);
+        if (dib == IntPtr.Zero) { _ = DeleteDC(mem); return; }
+        var old = SelectObject(mem, dib);
+        _ = BitBlt(mem, 0, 0, w, h, dc, 0, 0, 0x00CC0020 /* SRCCOPY */);
+        var size = w * h * 4;
+        using (var f = File.Create(path))
+        {
+            var header = new byte[14];
+            header[0] = (byte)'B'; header[1] = (byte)'M';
+            BitConverter.TryWriteBytes(header.AsSpan(2), 54 + size);
+            BitConverter.TryWriteBytes(header.AsSpan(10), 54);
+            f.Write(header);
+            f.Write(info);
+            f.Write(new ReadOnlySpan<byte>(bits, size));
+        }
+        _ = SelectObject(mem, old);
+        _ = DeleteObject(dib);
+        _ = DeleteDC(mem);
+        Ccw.Log($"draw check: window pixels saved to {path}");
+    }
+
+    static void DrawCheck()
+    {
+        int* r = stackalloc int[4];
+        _ = GetClientRect(FrameworkView.CoreHwnd, r);
+        var core = $"{r[2] - r[0]}x{r[3] - r[1]}";
+        _ = GetClientRect(child, r);
+        int w = r[2] - r[0], h = r[3] - r[1];
+        var counts = new Dictionary<uint, int>();
+        var dc = GetDC(child);
+        for (int y = 0; y < h; y += Math.Max(1, h / 20))
+            for (int x = 0; x < w; x += Math.Max(1, w / 20))
+            {
+                var p = GetPixel(dc, x, y);
+                counts[p] = counts.GetValueOrDefault(p) + 1;
+            }
+        SaveBitmap(dc, w, h, Path.Combine(Path.GetTempPath(), "xamlshim-window.bmp"));
+        _ = ReleaseDC(child, dc);
+        var colors = string.Join(", ", counts.OrderByDescending(c => c.Value).Take(6).Select(c => $"{c.Key:x6} x{c.Value}"));
+        var content = Microsoft.UI.Xaml.Window.Current?.Content as Microsoft.UI.Xaml.FrameworkElement;
+        var root = content?.XamlRoot;
+        Ccw.Log($"draw check: CoreWindow client {core}, Uno window {w}x{h} visible {IsWindowVisible(child)}; content " +
+                $"{content?.GetType().Name ?? "null"} {content?.ActualWidth}x{content?.ActualHeight} visibility {content?.Visibility}; " +
+                $"XamlRoot {root?.Size.Width}x{root?.Size.Height}; pixels {colors}");
     }
 
     [DllImport("user32.dll")] static extern void PostQuitMessage(int code);
