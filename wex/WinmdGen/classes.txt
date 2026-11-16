@@ -114,6 +114,8 @@ Windows.UI.Xaml.Controls.Primitives.Popup
 Windows.UI.Xaml.Controls.RichEditBox
 --class
 Windows.UI.Xaml.Data.Binding
+--class
+Windows.UI.Xaml.Data.PropertyChangedEventArgs
 --interface
 Windows.UI.Xaml.Markup.IComponentConnector2
 --interface

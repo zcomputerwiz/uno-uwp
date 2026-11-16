@@ -272,6 +272,19 @@ public unsafe partial class UI_Xaml_PropertyPath_Factory
     }
 }
 
+/* new PropertyChangedEventArgs(name): what an application's INotifyPropertyChanged raises (C++/CX view models make
+ * one for every property they change); composable */
+public unsafe partial class UI_Xaml_Data_PropertyChangedEventArgs
+{
+    public string PropertyName { get; init; } = "";
+}
+
+public unsafe partial class UI_Xaml_Data_PropertyChangedEventArgs_Factory
+{
+    int IUI_Xaml_Data_IPropertyChangedEventArgsFactory_Abi.CreateInstance(IntPtr name, IntPtr outer, IntPtr* inner, IntPtr* result) =>
+        Shim.Compose(new UI_Xaml_Data_PropertyChangedEventArgs { PropertyName = HString.Read(name) ?? "" }, outer, inner, result);
+}
+
 // ---- DependencyProperty ----
 
 public unsafe partial class UI_Xaml_DependencyProperty
@@ -386,6 +399,15 @@ static unsafe class DependencyProperties
 public unsafe partial class UI_Xaml_DependencyObject
 {
     Mux.DependencyObject Do => (Mux.DependencyObject)UnoObject!;
+
+    /* the CoreDispatcher of the view's thread (Wine's, as Window.Dispatcher gives): every element lives on that thread;
+     * null without a view */
+    int IUI_Xaml_IDependencyObject_Abi.get_Dispatcher(IntPtr* result)
+    {
+        *result = IntPtr.Zero;
+        if (FrameworkView.CoreWindow == IntPtr.Zero) return 0;
+        return UI_Core_ICoreWindow_Call.get_Dispatcher(FrameworkView.CoreWindow, result);
+    }
 
     int IUI_Xaml_IDependencyObject_Abi.GetValue(IntPtr dp, IntPtr* result)
     {
