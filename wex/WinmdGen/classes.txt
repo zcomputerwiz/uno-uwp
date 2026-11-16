@@ -184,3 +184,5 @@ Windows.UI.Xaml.Media.DoubleCollection
 Windows.UI.Xaml.Media.FontFamily
 --class
 Windows.UI.Xaml.Setter
+--class
+Windows.UI.Text.FontWeights

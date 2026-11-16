@@ -60,11 +60,15 @@ public abstract class ShimFactory : ShimObject
     /* the Uno class of a runtime class name, or null */
     public static Type? UnoTypeOf(string className)
     {
-        const string prefix = "Windows.UI.Xaml.", winui2 = "Microsoft.UI.Xaml.";
-        if (!className.StartsWith(prefix, StringComparison.Ordinal) && !className.StartsWith(winui2, StringComparison.Ordinal)) return null;
+        /* Windows.UI.Text classes served by Windows.UI.Xaml.dll (FontWeights) are Uno's Microsoft.UI.Text ones */
+        const string prefix = "Windows.UI.Xaml.", winui2 = "Microsoft.UI.Xaml.", text = "Windows.UI.Text.";
+        if (!className.StartsWith(prefix, StringComparison.Ordinal) && !className.StartsWith(winui2, StringComparison.Ordinal) &&
+            !className.StartsWith(text, StringComparison.Ordinal)) return null;
         return unoTypes.GetOrAdd(className, name =>
         {
-            var unoName = name.StartsWith(winui2, StringComparison.Ordinal) ? name : "Microsoft.UI.Xaml." + name[prefix.Length..];
+            var unoName = name.StartsWith(winui2, StringComparison.Ordinal) ? name :
+                          name.StartsWith(text, StringComparison.Ordinal) ? "Microsoft.UI.Text." + name[text.Length..] :
+                          "Microsoft.UI.Xaml." + name[prefix.Length..];
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
                 if (!assembly.IsDynamic && assembly.GetType(unoName) is { } t)
                     return t;
