@@ -125,11 +125,23 @@ public static unsafe partial class XbfLoader
             var found = connected.TryGetValue(id, out var o) ? o : (built as Mux.FrameworkElement)?.FindName(n);
             if (found == null && shim.UnoObject is Mux.FrameworkElement rootElement && rootElement.Resources.TryGetValue(n, out var r)) found = r;
             if (found == null) { Ccw.Log($"connection {id}: {n} not found"); continue; }
-            var wrapper = Shim.For(found);
-            var p = Ccw.Get(wrapper);
+            /* an object of the application's own type (a converter) is its native object */
+            IntPtr p; string className;
+            if (found is NativeStandInObject standIn && NativeControls.NativeOf(standIn) is var nativeObject && nativeObject != IntPtr.Zero)
+            {
+                p = nativeObject;
+                Ccw.ComAddRef(p);
+                className = standIn.GetType().FullName ?? "native object";
+            }
+            else
+            {
+                var wrapper = Shim.For(found);
+                p = Ccw.Get(wrapper);
+                className = wrapper.RuntimeClassName;
+            }
             int hr = UI_Xaml_Markup_IComponentConnector_Call.Connect(connector, id, p);
             int hb = bindings != IntPtr.Zero ? UI_Xaml_Markup_IComponentConnector_Call.Connect(bindings, id, p) : 0;
-            Ccw.Log($"Connect {id} {n} ({wrapper.RuntimeClassName}): {hr:x8}" + (bindings != IntPtr.Zero ? $", bindings {hb:x8}" : ""));
+            Ccw.Log($"Connect {id} {n} ({className}): {hr:x8}" + (bindings != IntPtr.Zero ? $", bindings {hb:x8}" : ""));
             Ccw.ComRelease(p);
         }
         if (bindings != IntPtr.Zero) Ccw.ComRelease(bindings);

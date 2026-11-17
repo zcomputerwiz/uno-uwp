@@ -75,3 +75,17 @@ public unsafe partial class UI_Xaml_Controls_ScrollViewer
         return 0;
     }
 }
+
+/* CalendarDatePicker's dates are Windows.Foundation.DateTime (100 ns ticks since 1601, UTC) here, DateTimeOffset in Uno */
+public unsafe partial class UI_Xaml_Controls_CalendarDatePicker
+{
+    static DateTimeOffset ToDate(long ticks) => new(DateTime.FromFileTimeUtc(ticks), TimeSpan.Zero);
+    static long FromDate(DateTimeOffset date) => date.UtcDateTime.ToFileTimeUtc();
+
+    Microsoft.UI.Xaml.Controls.CalendarDatePicker Picker => (Microsoft.UI.Xaml.Controls.CalendarDatePicker)UnoObject!;
+
+    int IUI_Xaml_Controls_ICalendarDatePicker_Abi.get_MinDate(long* result) { *result = FromDate(Picker.MinDate); return 0; }
+    int IUI_Xaml_Controls_ICalendarDatePicker_Abi.put_MinDate(long value) { Picker.MinDate = ToDate(value); return 0; }
+    int IUI_Xaml_Controls_ICalendarDatePicker_Abi.get_MaxDate(long* result) { *result = FromDate(Picker.MaxDate); return 0; }
+    int IUI_Xaml_Controls_ICalendarDatePicker_Abi.put_MaxDate(long value) { Picker.MaxDate = ToDate(value); return 0; }
+}

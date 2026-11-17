@@ -76,3 +76,38 @@ public unsafe partial class UI_Xaml_Markup_XamlBindingHelper_Factory
         return 0;
     }
 }
+
+/* XamlMarkupHelper.UnloadObject and FindName: x:Load (the Calculator's modes). XamlReader builds every element at once, so
+ * an unloaded element is collapsed, and FindName brings it back with the visibility it had */
+public unsafe partial class UI_Xaml_Markup_XamlMarkupHelper_Factory
+{
+    internal static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, object> Unloaded = new();
+
+    int IUI_Xaml_Markup_IXamlMarkupHelperStatics_Abi.UnloadObject(IntPtr element)
+    {
+        if (Boxing.Unbox(element) is Microsoft.UI.Xaml.UIElement target)
+        {
+            Unloaded.Remove(target);
+            Unloaded.Add(target, target.Visibility);
+            target.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+            if (Ccw.Calls) Ccw.Log($"UnloadObject: {target.GetType().Name} {(target as Microsoft.UI.Xaml.FrameworkElement)?.Name} collapsed");
+        }
+        return 0;
+    }
+}
+
+public unsafe partial class UI_Xaml_FrameworkElement
+{
+    int IUI_Xaml_IFrameworkElement_Abi.FindName(IntPtr name, IntPtr* result)
+    {
+        var found = Reflect.Call(this, "FindName", new object?[] { HString.Read(name) });
+        if (found is Microsoft.UI.Xaml.UIElement element && UI_Xaml_Markup_XamlMarkupHelper_Factory.Unloaded.TryGetValue(element, out var visibility))
+        {
+            UI_Xaml_Markup_XamlMarkupHelper_Factory.Unloaded.Remove(element);
+            element.Visibility = (Microsoft.UI.Xaml.Visibility)visibility;
+            if (Ccw.Calls) Ccw.Log($"FindName: {element.GetType().Name} {(element as Microsoft.UI.Xaml.FrameworkElement)?.Name} loaded again, visibility {visibility}");
+        }
+        *result = Boxing.Box(found);
+        return 0;
+    }
+}

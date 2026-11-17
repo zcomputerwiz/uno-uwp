@@ -282,8 +282,42 @@ public static unsafe class CoreWindowHost
         /* XAMLSHIM_HITTEST="x,y;x,y": what Uno's hit test finds at these points of the window, at every tick (lab diagnostics) */
         var hitPoints = Environment.GetEnvironmentVariable("XAMLSHIM_HITTEST");
         var watchedPopups = new HashSet<object>();
+        /* XAMLSHIM_THEMEKEYS="Key,Key": where each theme resource is defined (top level or a theme dictionary, through the merged dictionaries) */
+        var themeKeys = Environment.GetEnvironmentVariable("XAMLSHIM_THEMEKEYS");
+        bool themeKeysDone = false;
+        void LogThemeKeys()
+        {
+            if (themeKeysDone || string.IsNullOrEmpty(themeKeys)) return;
+            themeKeysDone = true;
+            static string Show(object? v) => v switch
+            {
+                Microsoft.UI.Xaml.Media.SolidColorBrush b => $"SolidColorBrush {b.Color}",
+                Windows.UI.Color c => $"Color {c}",
+                null => "null",
+                _ => v.GetType().Name
+            };
+            void Search(Microsoft.UI.Xaml.ResourceDictionary d, string key, string path, int depth)
+            {
+                if (depth > 12) return;
+                if (d.ContainsKey(key)) Ccw.Log($"  theme key {key}: {path} top level = {Show(d[key])}");
+                foreach (var td in d.ThemeDictionaries)
+                    if (td.Value is Microsoft.UI.Xaml.ResourceDictionary t)
+                    {
+                        if (t.ContainsKey(key)) Ccw.Log($"  theme key {key}: {path} theme {td.Key} = {Show(t[key])}");
+                        foreach (var m in t.MergedDictionaries) Search(m, key, $"{path} theme {td.Key} merged", depth + 1);
+                    }
+                int i = 0;
+                foreach (var m in d.MergedDictionaries) Search(m, key, $"{path} merged[{i++}]", depth + 1);
+            }
+            foreach (var key in themeKeys.Split(',', StringSplitOptions.RemoveEmptyEntries))
+            {
+                Ccw.Log($"theme key {key}: application theme {Microsoft.UI.Xaml.Application.Current.RequestedTheme}");
+                Search(Microsoft.UI.Xaml.Application.Current.Resources, key, "application", 0);
+            }
+        }
         timer.Tick += (_, _) =>
         {
+            LogThemeKeys();
             /* the content of the open popups: pointer input there does not reach the window's content element */
             if (!string.IsNullOrEmpty(hitPoints) && Microsoft.UI.Xaml.Window.Current?.Content is { } popupRoot)
                 foreach (var popup in Microsoft.UI.Xaml.Media.VisualTreeHelper.GetOpenPopupsForXamlRoot(popupRoot.XamlRoot))
@@ -407,7 +441,7 @@ public static unsafe class CoreWindowHost
                         }
                     }
                 }
-            if (DrawCheck() >= 8) timer.Stop();
+            if (DrawCheck() >= (int.TryParse(Environment.GetEnvironmentVariable("XAMLSHIM_CHECKS"), out var maxChecks) ? maxChecks : 8)) timer.Stop();
         };
         timer.Start();
     }
