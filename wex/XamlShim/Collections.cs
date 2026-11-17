@@ -29,6 +29,8 @@ public static unsafe class Boxing
         return statics = f;
     }
 
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, VectorShim> objectLists = new();
+
     /* an AddRef'd IInspectable for a managed value: shims for framework objects, PropertyValue for the rest */
     public static IntPtr Box(object? value)
     {
@@ -70,6 +72,9 @@ public static unsafe class Boxing
         case Guid v: Marshal.ThrowExceptionForHR(Foundation_IPropertyValueStatics_Call.CreateGuid(Statics(), v, &result)); return result;
         case TimeSpan v: Marshal.ThrowExceptionForHR(Foundation_IPropertyValueStatics_Call.CreateTimeSpan(Statics(), v.Ticks, &result)); return result;
         case DateTimeOffset v: Marshal.ThrowExceptionForHR(Foundation_IPropertyValueStatics_Call.CreateDateTime(Statics(), v.ToFileTime(), &result)); return result;
+        /* a list of objects (RadioButtons.Items, an ObservableCollection<object>): IVector<Object> over it, one per list */
+        case IList<object> list:
+            return Ccw.Get(objectLists.GetValue(list, l => new VectorShim(new AbiList<object>((IList<object>)l), false, "Windows.Foundation.Collections.IVector`1<Object>")));
         default: throw new NotSupportedException("cannot box " + value.GetType().FullName);
         }
     }
@@ -182,6 +187,7 @@ public sealed unsafe class VectorShim : ShimObject
 
     readonly IAbiList list;
     readonly Guid? elementIid;    /* the default interface of T when T is a runtime class; null for Object */
+    readonly string? elementClass;
     readonly string className;
     readonly (Guid, IntPtr, Func<object, bool>)[] table;
 
@@ -197,6 +203,7 @@ public sealed unsafe class VectorShim : ShimObject
     {
         this.list = list;
         elementIid = element?.Iid;
+        elementClass = element?.Class;
         this.className = className;
         var t = element is { } e ? $"rc({e.Class};{PInterface.Sig(e.Iid)})" : ObjectSig;
         table = [(PInterface.Iid($"pinterface({IVector};{t})"), VectorVtbl, _ => true),
@@ -318,12 +325,90 @@ public sealed unsafe class VectorShim : ShimObject
         return (IntPtr)v;
     }
 
+    /* the element of the list as the application gets it, and the count: what an iterator over it reads */
+    internal int Count => list.Count;
+    internal IntPtr NativeAt(int index) => ToNative(list[index]);
+    internal string ElementSig => elementIid is { } iid && elementClass != null ? $"rc({elementClass};{PInterface.Sig(iid)})" : ObjectSig;
+
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
-    static int First(IntPtr b, IntPtr* iterator) { Ccw.NotImplemented("IIterable.First"); *iterator = IntPtr.Zero; return unchecked((int)0x80004001); }
+    static int First(IntPtr b, IntPtr* iterator) => Run("IIterable.First", () =>
+    {
+        var s = Self(b);
+        *iterator = Ccw.Get(new IteratorShim(s));
+        return 0;
+    });
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
     static int AddVectorChanged(IntPtr b, IntPtr handler, long* token) { Ccw.NotImplemented("IObservableVector.add_VectorChanged (accepted, not raised)"); *token = Shim.Token(); return 0; }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
     static int RemoveVectorChanged(IntPtr b, long token) => 0;
+}
+
+/* IIterator<T> over a VectorShim (T is Object, or the runtime class the vector holds): the list is read as it is, by index */
+public sealed unsafe class IteratorShim : ShimObject
+{
+    readonly VectorShim owner;
+    readonly (Guid, IntPtr, Func<object, bool>)[] table;
+    int index;
+
+    public IteratorShim(VectorShim owner)
+    {
+        this.owner = owner;
+        table = [(PInterface.Iid($"pinterface({{6a79e863-4300-459a-9966-cbb660963ee1}};{owner.ElementSig})"), IteratorVtbl, _ => true)];
+    }
+
+    public override string RuntimeClassName => "Windows.Foundation.Collections.IIterator`1";
+    internal override (Guid Iid, IntPtr Vtbl, Func<object, bool> Implements)[]? CustomInterfaces => table;
+
+    static IteratorShim Self(IntPtr block) => (IteratorShim)Ccw.Target(block);
+
+    static readonly IntPtr IteratorVtbl = MakeIterator();
+
+    static IntPtr MakeIterator()
+    {
+        var v = (IntPtr*)RuntimeHelpers.AllocateTypeAssociatedMemory(typeof(IteratorShim), sizeof(IntPtr) * 10);
+        Ccw.FillInspectable(v);
+        v[6] = (IntPtr)(delegate* unmanaged[Stdcall]<IntPtr, IntPtr*, int>)&GetCurrent;
+        v[7] = (IntPtr)(delegate* unmanaged[Stdcall]<IntPtr, byte*, int>)&GetHasCurrent;
+        v[8] = (IntPtr)(delegate* unmanaged[Stdcall]<IntPtr, byte*, int>)&MoveNext;
+        v[9] = (IntPtr)(delegate* unmanaged[Stdcall]<IntPtr, uint, IntPtr*, uint*, int>)&GetMany;
+        return (IntPtr)v;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
+    static int GetCurrent(IntPtr b, IntPtr* item)
+    {
+        var s = Self(b);
+        *item = IntPtr.Zero;
+        if (s.index >= s.owner.Count) return unchecked((int)0x8000000B);   /* E_BOUNDS */
+        try { *item = s.owner.NativeAt(s.index); return 0; }
+        catch (Exception e) { return Ccw.Fail("IIterator.get_Current", e); }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
+    static int GetHasCurrent(IntPtr b, byte* has) { var s = Self(b); *has = (byte)(s.index < s.owner.Count ? 1 : 0); return 0; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
+    static int MoveNext(IntPtr b, byte* has)
+    {
+        var s = Self(b);
+        if (s.index < s.owner.Count) s.index++;
+        *has = (byte)(s.index < s.owner.Count ? 1 : 0);
+        return 0;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
+    static int GetMany(IntPtr b, uint capacity, IntPtr* items, uint* actual)
+    {
+        var s = Self(b);
+        uint n = 0;
+        try
+        {
+            while (s.index < s.owner.Count && n < capacity) items[n++] = s.owner.NativeAt(s.index++);
+            *actual = n;
+            return 0;
+        }
+        catch (Exception e) { return Ccw.Fail("IIterator.GetMany", e); }
+    }
 }
 
 /* Style.Setters: a SetterBaseCollection, IVector<SetterBase> over Uno's, with its IsSealed */
