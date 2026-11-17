@@ -270,3 +270,5 @@ Windows.UI.Xaml.Controls.ProgressBar
 Windows.UI.Xaml.Controls.PasswordBox
 --class
 Windows.UI.Xaml.Controls.AutoSuggestBox
+--class
+Windows.UI.Xaml.Controls.StyleSelector
