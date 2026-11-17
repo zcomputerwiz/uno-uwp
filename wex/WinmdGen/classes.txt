@@ -234,3 +234,11 @@ Windows.UI.Xaml.DataTemplate
 Windows.UI.Xaml.DataContextChangedEventArgs
 --class
 Windows.UI.Xaml.Markup.XamlBindingHelper
+--class
+Microsoft.UI.Xaml.Controls.ItemsRepeater
+--class
+Microsoft.UI.Xaml.Controls.ItemsRepeaterElementPreparedEventArgs
+--class
+Microsoft.UI.Xaml.Controls.ItemsRepeaterElementClearingEventArgs
+--class
+Microsoft.UI.Xaml.Controls.ItemsRepeaterElementIndexChangedEventArgs

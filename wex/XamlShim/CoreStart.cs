@@ -279,7 +279,136 @@ public static unsafe class CoreWindowHost
         }
         timer.Interval = TimeSpan.FromSeconds(8);
         timer.IsRepeating = true;
-        timer.Tick += (_, _) => { if (DrawCheck() >= 8) timer.Stop(); };
+        /* XAMLSHIM_HITTEST="x,y;x,y": what Uno's hit test finds at these points of the window, at every tick (lab diagnostics) */
+        var hitPoints = Environment.GetEnvironmentVariable("XAMLSHIM_HITTEST");
+        var watchedPopups = new HashSet<object>();
+        timer.Tick += (_, _) =>
+        {
+            /* the content of the open popups: pointer input there does not reach the window's content element */
+            if (!string.IsNullOrEmpty(hitPoints) && Microsoft.UI.Xaml.Window.Current?.Content is { } popupRoot)
+                foreach (var popup in Microsoft.UI.Xaml.Media.VisualTreeHelper.GetOpenPopupsForXamlRoot(popupRoot.XamlRoot))
+                {
+                    if (popup.Child is not { } pc) continue;
+                    Ccw.Log($"open popup {popup.GetType().Name} child {pc.GetType().Name} {(pc as Microsoft.UI.Xaml.FrameworkElement)?.ActualWidth}x{(pc as Microsoft.UI.Xaml.FrameworkElement)?.ActualHeight}");
+                    var firstSight = watchedPopups.Add(pc);
+                    Walk(pc, 0);
+                    if (!firstSight) continue;
+                    pc.AddHandler(Microsoft.UI.Xaml.UIElement.PointerPressedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, e) =>
+                        Ccw.Log($"popup pointer pressed: {e.OriginalSource?.GetType().Name} {(e.OriginalSource as Microsoft.UI.Xaml.FrameworkElement)?.Name} at {e.GetCurrentPoint(pc).Position} handled {e.Handled}")), true);
+                    pc.AddHandler(Microsoft.UI.Xaml.UIElement.PointerReleasedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, e) =>
+                        Ccw.Log($"popup pointer released: {e.OriginalSource?.GetType().Name} {(e.OriginalSource as Microsoft.UI.Xaml.FrameworkElement)?.Name} handled {e.Handled}")), true);
+                    pc.AddHandler(Microsoft.UI.Xaml.UIElement.TappedEvent, new Microsoft.UI.Xaml.Input.TappedEventHandler((_, e) =>
+                        Ccw.Log($"popup tapped: {e.OriginalSource?.GetType().Name} {(e.OriginalSource as Microsoft.UI.Xaml.FrameworkElement)?.Name}")), true);
+                    /* the expanders and the toggle buttons of the popup: what changes when they are clicked */
+                    void Walk(Microsoft.UI.Xaml.DependencyObject d, int depth)
+                    {
+                        if (d is Microsoft.UI.Xaml.Controls.Expander ex && watchedPopups.Add(ex))
+                        {
+                            Ccw.Log($"expander {ex.Name} header {(ex.Header as Microsoft.UI.Xaml.FrameworkElement)?.GetType().Name} expanded {ex.IsExpanded} enabled {ex.IsEnabled} {ex.ActualWidth}x{ex.ActualHeight}");
+                            ex.RegisterPropertyChangedCallback(Microsoft.UI.Xaml.Controls.Expander.IsExpandedProperty, (s, p) =>
+                            {
+                                Ccw.Log($"expander {ex.Name} IsExpanded -> {ex.IsExpanded}; content {ex.Content?.GetType().Name} {(ex.Content as Microsoft.UI.Xaml.FrameworkElement)?.ActualWidth}x{(ex.Content as Microsoft.UI.Xaml.FrameworkElement)?.ActualHeight}");
+                                void Dump(Microsoft.UI.Xaml.DependencyObject o, int level)
+                                {
+                                    var f = o as Microsoft.UI.Xaml.FrameworkElement;
+                                    Ccw.Log($"  {new string(' ', level)}{o.GetType().Name} {f?.Name} {f?.ActualWidth}x{f?.ActualHeight} vis {f?.Visibility}" +
+                                            (o is Microsoft.UI.Xaml.Controls.ItemsControl ic ? $" items {ic.Items.Count} source {ic.ItemsSource?.GetType().Name}" : "") +
+                                            (o is Microsoft.UI.Xaml.Controls.ItemsRepeater r ? $" repeater source {r.ItemsSource?.GetType().FullName} count {r.ItemsSourceView?.Count} template {r.ItemTemplate?.GetType().Name} layout {r.Layout?.GetType().Name}" : ""));
+                                    if (level > 14) return;
+                                    int n = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(o);
+                                    for (int i = 0; i < n; i++) Dump(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(o, i), level + 1);
+                                }
+                                if (ex.IsExpanded) Dump(ex, 0);
+                            });
+                            ex.Expanding += (s, a) => Ccw.Log($"expander {ex.Name} Expanding");
+                        }
+                        else if (d is Microsoft.UI.Xaml.Controls.Primitives.ToggleButton tb && watchedPopups.Add(tb))
+                        {
+                            Ccw.Log($"toggle button {tb.Name} checked {tb.IsChecked} enabled {tb.IsEnabled} mode {tb.ClickMode} {tb.ActualWidth}x{tb.ActualHeight}");
+                            tb.RegisterPropertyChangedCallback(Microsoft.UI.Xaml.Controls.Primitives.ToggleButton.IsCheckedProperty, (s, p) => Ccw.Log($"toggle button {tb.Name} IsChecked -> {tb.IsChecked}"));
+                            tb.RegisterPropertyChangedCallback(Microsoft.UI.Xaml.Controls.Primitives.ButtonBase.IsPressedProperty, (s, p) => Ccw.Log($"toggle button {tb.Name} IsPressed -> {tb.IsPressed}"));
+                            tb.Click += (s, a) => Ccw.Log($"toggle button {tb.Name} Click");
+                            tb.RegisterPropertyChangedCallback(Microsoft.UI.Xaml.Controls.Primitives.ButtonBase.IsPointerOverProperty, (s, p) => Ccw.Log($"toggle button {tb.Name} IsPointerOver -> {tb.IsPointerOver}"));
+                            tb.AddHandler(Microsoft.UI.Xaml.UIElement.PointerEnteredEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((s, a) => Ccw.Log($"toggle button {tb.Name} PointerEntered over {tb.IsPointerOver}")), true);
+                            tb.AddHandler(Microsoft.UI.Xaml.UIElement.PointerExitedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((s, a) => Ccw.Log($"toggle button {tb.Name} PointerExited")), true);
+                            tb.AddHandler(Microsoft.UI.Xaml.UIElement.PointerPressedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((s, a) => Ccw.Log($"toggle button {tb.Name} PointerPressed source {a.OriginalSource?.GetType().Name} handled {a.Handled} pressed {tb.IsPressed} over {tb.IsPointerOver} enabled {tb.IsEnabled} hit {tb.IsHitTestVisible}")), true);
+                            tb.AddHandler(Microsoft.UI.Xaml.UIElement.PointerReleasedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((s, a) => Ccw.Log($"toggle button {tb.Name} PointerReleased handled {a.Handled} pressed {tb.IsPressed} over {tb.IsPointerOver}")), true);
+                            /* where on the way up from the source the event turns handled */
+                            void Chain(Microsoft.UI.Xaml.DependencyObject e, int level)
+                            {
+                                if (e is Microsoft.UI.Xaml.UIElement u)
+                                    u.AddHandler(Microsoft.UI.Xaml.UIElement.PointerPressedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((s, a) =>
+                                        Ccw.Log($"  press passes {u.GetType().Name} {(u as Microsoft.UI.Xaml.FrameworkElement)?.Name}: handled {a.Handled}")), true);
+                                if (level > 12) return;
+                                int cc = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(e);
+                                for (int i = 0; i < cc; i++) Chain(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(e, i), level + 1);
+                            }
+                            Chain(tb, 0);
+                            tb.AddHandler(Microsoft.UI.Xaml.UIElement.PointerCanceledEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((s, a) => Ccw.Log($"toggle button {tb.Name} PointerCanceled")), true);
+                            tb.AddHandler(Microsoft.UI.Xaml.UIElement.PointerCaptureLostEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((s, a) => Ccw.Log($"toggle button {tb.Name} PointerCaptureLost")), true);
+                        }
+                        if (depth > 60) return;
+                        int count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(d);
+                        for (int i = 0; i < count; i++) Walk(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(d, i), depth + 1);
+                    }
+                    foreach (var pair in hitPoints.Split(';', StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        var xy = pair.Split(',');
+                        if (xy.Length != 2 || !double.TryParse(xy[0], out var px) || !double.TryParse(xy[1], out var py)) continue;
+                        var inside = Microsoft.UI.Xaml.Media.VisualTreeHelper.FindElementsInHostCoordinates(new Windows.Foundation.Point(px, py), pc).ToList();
+                        Ccw.Log($"popup hit test at {px},{py}: {inside.Count} elements: " + string.Join(" > ", inside.Take(8).Select(x => x.GetType().Name + " " + (x as Microsoft.UI.Xaml.FrameworkElement)?.Name)));
+                    }
+                }
+            if (!string.IsNullOrEmpty(hitPoints) && Microsoft.UI.Xaml.Window.Current?.Content is { } root)
+                foreach (var pair in hitPoints.Split(';', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var xy = pair.Split(',');
+                    if (xy.Length != 2 || !double.TryParse(xy[0], out var hx) || !double.TryParse(xy[1], out var hy)) continue;
+                    try
+                    {
+                        var found = Microsoft.UI.Xaml.Media.VisualTreeHelper.FindElementsInHostCoordinates(new Windows.Foundation.Point(hx, hy), root).ToList();
+                        Ccw.Log($"hit test at {hx},{hy}: {found.Count} elements");
+                        foreach (var element in found.Take(6))
+                        {
+                            var chain = new StringBuilder();
+                            Microsoft.UI.Xaml.DependencyObject? o = element;
+                            for (int depth = 0; o != null && depth < 40; depth++, o = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(o))
+                                if (o is Microsoft.UI.Xaml.UIElement ue && (!ue.IsHitTestVisible || ue.Visibility != Microsoft.UI.Xaml.Visibility.Visible || ue.Opacity == 0))
+                                    chain.Append($" [{o.GetType().Name} {(o as Microsoft.UI.Xaml.FrameworkElement)?.Name} hit {ue.IsHitTestVisible} vis {ue.Visibility} opacity {ue.Opacity}]");
+                            Ccw.Log($"  {element.GetType().Name} {(element as Microsoft.UI.Xaml.FrameworkElement)?.Name} actual {(element as Microsoft.UI.Xaml.FrameworkElement)?.ActualWidth}x{(element as Microsoft.UI.Xaml.FrameworkElement)?.ActualHeight}{chain}");
+                        }
+                    }
+                    catch (Exception ex) { Ccw.Log($"hit test at {hx},{hy}: {ex.GetType().Name} {ex.Message}"); }
+                    /* below the deepest hit: its children, then the first child's, ... (why the hit test stops there) */
+                    if (hx == 150 && hy == 160)
+                    {
+                        /* the topmost child whose layout bounds hold the point, level by level */
+                        Microsoft.UI.Xaml.DependencyObject? o = root;
+                        for (int depth = 0; o != null && depth < 40; depth++)
+                        {
+                            Microsoft.UI.Xaml.DependencyObject? next = null;
+                            int n = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(o);
+                            for (int i = n - 1; i >= 0 && next == null; i--)
+                            {
+                                var c = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(o, i);
+                                if (c is not Microsoft.UI.Xaml.FrameworkElement fe || fe.Visibility != Microsoft.UI.Xaml.Visibility.Visible) continue;
+                                try
+                                {
+                                    var rect = fe.TransformToVisual(root).TransformBounds(new Windows.Foundation.Rect(0, 0, fe.ActualWidth, fe.ActualHeight));
+                                    if (rect.Contains(new Windows.Foundation.Point(hx, hy))) next = c;
+                                }
+                                catch { }
+                            }
+                            if (next == null) { Ccw.Log($"  layout path ends at {o.GetType().Name} ({n} children)"); break; }
+                            var f = (Microsoft.UI.Xaml.FrameworkElement)next;
+                            Ccw.Log($"  layout path {depth}: {next.GetType().Name} {f.Name} {f.ActualWidth}x{f.ActualHeight} hit {f.IsHitTestVisible} op {f.Opacity} rt {f.RenderTransform?.GetType().Name} clip {f.Clip != null}" +
+                                    (f is Microsoft.UI.Xaml.Controls.Panel pn ? $" background {(pn.Background == null ? "null" : pn.Background.GetType().Name)}" : ""));
+                            o = next;
+                        }
+                    }
+                }
+            if (DrawCheck() >= 8) timer.Stop();
+        };
         timer.Start();
     }
 

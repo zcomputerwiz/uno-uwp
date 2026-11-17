@@ -36,6 +36,49 @@ public static unsafe partial class NativeControls
     static readonly MethodInfo applyingTemplate = typeof(NativeControls).GetMethod(nameof(ApplyingTemplate))!;
     static readonly MethodInfo applyTemplate = typeof(NativeControls).GetMethod(nameof(ApplyTemplate))!;
     static readonly ConditionalWeakTable<object, object> inApply = new();
+    static readonly MethodInfo inControlBase = typeof(NativeControls).GetMethod(nameof(InControlBase))!;
+    static readonly MethodInfo callControlOverride = typeof(NativeControls).GetMethod(nameof(CallControlOverride))!;
+    static readonly ConditionalWeakTable<object, HashSet<string>> inControl = new();
+
+    /* the input and focus overrides of Windows.UI.Xaml.Controls.Control (IControlOverrides) a stand-in routes to the application */
+    static readonly string[] controlOverrides =
+    [
+        "OnPointerEntered", "OnPointerPressed", "OnPointerMoved", "OnPointerReleased", "OnPointerExited", "OnPointerCaptureLost",
+        "OnPointerCanceled", "OnPointerWheelChanged", "OnTapped", "OnDoubleTapped", "OnHolding", "OnRightTapped",
+        "OnKeyUp", "OnKeyDown", "OnGotFocus", "OnLostFocus"
+    ];
+
+    /* true while the application's override NAME runs for this element: its call to the base is Uno's */
+    public static bool InControlBase(object self, string name)
+    {
+        lock (inControl) return inControl.TryGetValue(self, out var names) && names.Contains(name);
+    }
+
+    /* the application's override NAME (IControlOverrides) for a stand-in, given the event arguments; false when the
+     * application has none to call (the base is Uno's then). The application decides whether to call its base. */
+    public static bool CallControlOverride(object self, string name, object args)
+    {
+        var native = Native(self);
+        if (native == IntPtr.Zero || Ccw.QueryInterface(native, Iids.UI_Xaml_Controls_IControlOverrides, out var overrides) < 0) return false;
+        HashSet<string> names;
+        lock (inControl) names = inControl.GetValue(self, _ => []);
+        lock (names) names.Add(name);
+        IntPtr abi = IntPtr.Zero;
+        try
+        {
+            abi = Boxing.Box(args);
+            var call = typeof(UI_Xaml_Controls_IControlOverrides_Call).GetMethod(name)!;
+            int hr = (int)call.Invoke(null, [overrides, abi])!;
+            if (hr < 0) Ccw.Log($"{name} of {self.GetType().FullName}: {hr:x8}");
+            return true;
+        }
+        finally
+        {
+            lock (names) names.Remove(name);
+            if (abi != IntPtr.Zero) Ccw.ComRelease(abi);
+            Ccw.ComRelease(overrides);
+        }
+    }
 
     /* true while the application's OnApplyTemplate runs for this element (its call to the base is Uno's) */
     public static bool ApplyingTemplate(object self) => inApply.TryGetValue(self, out _);
@@ -384,6 +427,39 @@ public static unsafe partial class NativeControls
                 builder.DefineMethodOverride(apply, unoApply);
             }
 
+            /* the application's input and focus overrides (a toolkit card that is not clickable does not handle the press, but
+             * the base of Uno would) */
+            if (typeof(Microsoft.UI.Xaml.Controls.Control).IsAssignableFrom(unoBase))
+                foreach (var name in controlOverrides)
+                {
+                    var unoMethod = unoBase.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                        .FirstOrDefault(m => m.Name == name && m.IsVirtual && !m.IsFinal && m.GetParameters().Length == 1 &&
+                                             (m.IsFamily || m.IsPublic || m.IsFamilyOrAssembly));
+                    if (unoMethod == null) continue;
+                    var argType = unoMethod.GetParameters()[0].ParameterType;
+                    var attributes = (unoMethod.IsPublic ? MethodAttributes.Public : MethodAttributes.Family) | MethodAttributes.Virtual | MethodAttributes.HideBySig;
+                    var method = builder.DefineMethod(name, attributes, typeof(void), [argType]);
+                    var ov = method.GetILGenerator();
+                    var runBase = ov.DefineLabel();
+                    var done = ov.DefineLabel();
+                    ov.Emit(OpCodes.Ldarg_0);
+                    ov.Emit(OpCodes.Ldstr, name);
+                    ov.Emit(OpCodes.Call, inControlBase);
+                    ov.Emit(OpCodes.Brtrue, runBase);
+                    ov.Emit(OpCodes.Ldarg_0);
+                    ov.Emit(OpCodes.Ldstr, name);
+                    ov.Emit(OpCodes.Ldarg_1);
+                    ov.Emit(OpCodes.Call, callControlOverride);
+                    ov.Emit(OpCodes.Brtrue, done);
+                    ov.MarkLabel(runBase);
+                    ov.Emit(OpCodes.Ldarg_0);
+                    ov.Emit(OpCodes.Ldarg_1);
+                    ov.Emit(OpCodes.Call, unoMethod);
+                    ov.MarkLabel(done);
+                    ov.Emit(OpCodes.Ret);
+                    builder.DefineMethodOverride(method, unoMethod);
+                }
+
             /* a template selector's choice comes from the application's SelectTemplateCore */
             if (typeof(Microsoft.UI.Xaml.Controls.DataTemplateSelector).IsAssignableFrom(unoBase))
             {
@@ -541,6 +617,9 @@ public static unsafe partial class NativeControls
         {
             boxed = value is string text ? FromString(m, text) : Boxing.Box(value);
             int hr = UI_Xaml_Markup_IXamlMember_Call.SetValue(m, native, boxed);
+            /* an item written in the property element of a collection (<SettingsExpander.Items><SettingsCard/>): it is added to the
+             * collection the property holds, which SetValue (the collection itself) refuses */
+            if (hr == unchecked((int)0x80004002) && value is not string && AddToCollection(m, native, boxed)) hr = 0;
             if (Ccw.Calls || hr < 0) Ccw.Log($"set {type}.{member} = {value} ({value?.GetType().Name ?? "null"}): {hr:x8}");
         }
         catch (Exception e) { Ccw.Log($"set {type}.{member} = {value}: {e.Message}"); }
@@ -548,6 +627,26 @@ public static unsafe partial class NativeControls
         {
             if (boxed != IntPtr.Zero) Ccw.ComRelease(boxed);
             Ccw.ComRelease(m);
+        }
+    }
+
+    static bool AddToCollection(IntPtr member, IntPtr instance, IntPtr item)
+    {
+        IntPtr type = IntPtr.Zero, collection = IntPtr.Zero;
+        try
+        {
+            if (UI_Xaml_Markup_IXamlMember_Call.get_Type(member, &type) < 0 || type == IntPtr.Zero) return false;
+            byte isCollection = 0;
+            if (UI_Xaml_Markup_IXamlType_Call.get_IsCollection(type, &isCollection) < 0 || isCollection == 0) return false;
+            if (UI_Xaml_Markup_IXamlMember_Call.GetValue(member, instance, &collection) < 0 || collection == IntPtr.Zero) return false;
+            int hr = UI_Xaml_Markup_IXamlType_Call.AddToVector(type, collection, item);
+            if (hr < 0) Ccw.Log($"AddToVector: {hr:x8}");
+            return hr >= 0;
+        }
+        finally
+        {
+            if (collection != IntPtr.Zero) Ccw.ComRelease(collection);
+            if (type != IntPtr.Zero) Ccw.ComRelease(type);
         }
     }
 
