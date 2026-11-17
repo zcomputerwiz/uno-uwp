@@ -470,6 +470,7 @@ public unsafe partial class UI_Xaml_Window
                             $" {fe.ActualWidth:0}x{fe.ActualHeight:0}" +
                             (fe.ActualHeight - Microsoft.UI.Xaml.Controls.Primitives.LayoutInformation.GetAvailableSize(fe).Height > 2 ? $" STALE avail {Microsoft.UI.Xaml.Controls.Primitives.LayoutInformation.GetAvailableSize(fe)} desired {fe.DesiredSize}" : "") + (fe.Visibility != Mux.Visibility.Visible ? " collapsed" : "") +
                             (fe.Opacity < 1 ? $" opacity {fe.Opacity:0.##}" : "") + (fe.IsLoaded ? "" : " not loaded") +
+                            (fe is Microsoft.UI.Xaml.Controls.Expander ex ? $" header {ex.Header?.GetType().FullName ?? "null"} template {(ex.Template != null ? "set" : "none")}" : "") +
                             (fe is Microsoft.UI.Xaml.Controls.Control ctl && !ctl.IsEnabled ? " disabled" : "") +
                             (fe is Microsoft.UI.Xaml.Controls.TextBlock tb ? $" text '{tb.Text}' size {tb.FontSize} font {tb.FontFamily?.Source} fg {Short(tb.Foreground)} weight {tb.FontWeight.Weight} stretch {tb.FontStretch} bounds {tb.TextLineBounds} lh {tb.LineHeight} lss {tb.LineStackingStrategy} maxl {tb.MaxLines} desired {tb.DesiredSize.Width:0.#}x{tb.DesiredSize.Height:0.#} opacity {tb.Opacity} metrics {FontMetrics(tb)} free {FreeMeasure(tb)} slot {Microsoft.UI.Xaml.Controls.Primitives.LayoutInformation.GetLayoutSlot(tb)} avail {Microsoft.UI.Xaml.Controls.Primitives.LayoutInformation.GetAvailableSize(tb)} margin {tb.Margin} pad {tb.Padding} va {tb.VerticalAlignment} h {tb.Height} maxh {tb.MaxHeight} wrap {tb.TextWrapping} trim {tb.TextTrimming}" +
                                 (tb.GetBindingExpression(Microsoft.UI.Xaml.Controls.TextBlock.TextProperty) is { } be
@@ -488,6 +489,7 @@ public unsafe partial class UI_Xaml_Window
                 if (depth > 40) return;
                 int n = Mux.Media.VisualTreeHelper.GetChildrenCount(o);
                 for (int i = 0; i < n; i++) Walk(Mux.Media.VisualTreeHelper.GetChild(o, i), depth + 1);
+                if (n == 0 && o is Microsoft.UI.Xaml.Controls.Primitives.Popup { Child: { } popupChild }) Walk(popupChild, depth + 1);
             }
             Ccw.Log($"window bounds {UnoWindow.Bounds}");
             for (var p = UnoWindow.Content != null ? Mux.Media.VisualTreeHelper.GetParent(UnoWindow.Content) : null; p != null;

@@ -260,6 +260,20 @@ public static class StructConvert
             }
             if (ok) return ctor.Invoke(args);
         }
+        /* or one taking them in the ABI's order (GridLength(double value, GridUnitType type) for Value and GridUnitType) */
+        if (uno.GetProperties(Members).All(p => !p.CanWrite) && uno.GetFields(Members).All(f => f.IsInitOnly || f.IsStatic))
+            foreach (var ctor in uno.GetConstructors())
+            {
+                var ps = ctor.GetParameters();
+                if (ps.Length != fields.Length) continue;
+                try
+                {
+                    var args = new object?[ps.Length];
+                    for (int i = 0; i < ps.Length; i++) args[i] = Convert(fields[i].GetValue(abi), ps[i].ParameterType);
+                    return ctor.Invoke(args);
+                }
+                catch (Exception e) when (e is NotSupportedException or InvalidCastException or FormatException or OverflowException) { }
+            }
         /* or the default value with every member set */
         object result = Activator.CreateInstance(uno)!;
         foreach (var field in fields)

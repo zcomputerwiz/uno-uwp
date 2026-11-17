@@ -236,7 +236,62 @@ public static unsafe partial class XbfLoader
         var property = top.Elements().FirstOrDefault(e => e.Name.LocalName.EndsWith(".Resources", StringComparison.Ordinal));
         var children = (property ?? top).Elements().Where(e => property != null || !e.Name.LocalName.Contains('.')).ToList();
         if (children.Count == 0) { Ccw.Log("App.xaml has no Application.Resources"); return new Mux.ResourceDictionary(); }
-        return BuildDictionary(top, children, "application");
+        var resources = BuildDictionary(top, children, "application");
+        AddGenericDictionaries(resources);
+        return resources;
+    }
+
+    /* The default styles of the package's own controls (a library's Themes\Generic.xaml, compiled to Files\<Library>\Themes\Generic.xbf):
+     * Windows finds them by the control's DefaultStyleKey, Uno by the implicit style of the control's type, so they are merged
+     * into the application's resources. A dictionary merged by Source (ms-appx:///Library/Control/Control.xaml) is the
+     * compiled file of that name, put in its place. */
+    static void AddGenericDictionaries(Mux.ResourceDictionary resources)
+    {
+        var files = AllXbf().ToList();
+        XElement? Compiled(string source)
+        {
+            var path = source.StartsWith("ms-appx:///", StringComparison.OrdinalIgnoreCase) ? source["ms-appx:///".Length..] : null;
+            if (path == null || !path.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase)) return null;
+            var want = "\\Files\\" + path[..^5].Replace('/', '\\') + ".xbf";
+            foreach (var (name, doc) in files)
+                if (name.EndsWith(want, StringComparison.OrdinalIgnoreCase)) return new XElement(doc.Root!);
+            return null;
+        }
+        void Inline(XElement e, int depth)
+        {
+            foreach (var m in e.DescendantsAndSelf().Where(d => d.Name.LocalName == "ResourceDictionary" && d.Attribute("Source") != null).ToList())
+            {
+                var compiled = depth < 8 ? Compiled(m.Attribute("Source")!.Value) : null;
+                if (compiled == null) { Ccw.Log($"generic styles: no compiled file for {m.Attribute("Source")!.Value}"); m.Remove(); continue; }
+                Inline(compiled, depth + 1);
+                m.ReplaceWith(compiled);
+            }
+        }
+        foreach (var (name, doc) in files)
+        {
+            if (!name.EndsWith("\\Themes\\Generic.xbf", StringComparison.OrdinalIgnoreCase)) continue;
+            try
+            {
+                var top = new XElement(doc.Root!);
+                Inline(top, 0);
+                var generic = BuildDictionary(top, new List<XElement> { top }, "generic " + name);
+                resources.MergedDictionaries.Add(generic);
+                /* the implicit styles of the controls' types are looked up in the application's own dictionary */
+                void Copy(Mux.ResourceDictionary d)
+                {
+                    foreach (var m in d.MergedDictionaries) Copy(m);
+                    Ccw.Log($"generic dictionary: {d.Count} entries, {d.MergedDictionaries.Count} merged: " + string.Join(", ", d.Keys.Select(k => k is Type kt ? "T:" + kt.Name : k?.ToString()).Take(40)));
+                    foreach (var kv in d)
+                    {
+                        if (kv.Key is Type tk && kv.Value is Mux.Style st)
+                            Ccw.Log($"generic style for {tk.FullName}: {st.Setters.Count} setters, based on {(st.BasedOn == null ? "nothing" : st.BasedOn.Setters.Count + " setters")}, target {st.TargetType}");
+                        if (kv.Key is Type && kv.Value is Mux.Style && !resources.ContainsKey(kv.Key)) resources[kv.Key] = kv.Value;
+                    }
+                }
+                Copy(generic);
+            }
+            catch (Exception e) { Ccw.Log($"generic styles {name}: {FirstLine(e)}"); }
+        }
     }
 
     /* a resource dictionary from the entries of a compiled XAML file's root (its X.Resources) */
@@ -250,6 +305,8 @@ public static unsafe partial class XbfLoader
         var namespaces = top.Attributes().Where(a => a.IsNamespaceDeclaration).ToList();
         foreach (var ns in namespaces) dict.SetAttributeValue(ns.Name, ns.Value);
         ResolveConditionalNamespaces(dict);
+        HoistStyleResources(dict);
+        ContentTemplateBindings(dict);
         MapPackageUris(dict);
         NativeControls.Prepare(dict);
         QualifyTargetTypes(dict);
@@ -263,7 +320,17 @@ public static unsafe partial class XbfLoader
             Ccw.Log($"{what} resources: {whole.Count} entries, {whole.MergedDictionaries.Count} merged, {whole.ThemeDictionaries.Count} themes");
             return whole;
         }
-        catch (Exception e) { Ccw.Log($"{what} resources as a whole: {FirstLine(e)}; loading them one by one"); }
+        catch (Exception e)
+        {
+            Ccw.Log($"{what} resources as a whole: {FirstLine(e)}; loading them one by one");
+            if (Ccw.Calls)
+            {
+                var text = e.ToString();
+                Ccw.Log($"  {text[..Math.Min(text.Length, 1800)]}");
+            }
+            if (Ccw.Calls)
+                File.WriteAllText(Path.Combine(Path.GetTempPath(), "xamlshim-fail-" + new string(what.Where(char.IsLetterOrDigit).ToArray()) + ".xaml"), dict.ToString());
+        }
 
         var result = new Mux.ResourceDictionary();
         Mux.ResourceDictionary LoadDictionary(XElement element)
@@ -305,6 +372,62 @@ public static unsafe partial class XbfLoader
         FixBasedOn(dict, result, result, what);
         Ccw.Log($"{what} resources: {result.Count} entries, {result.MergedDictionaries.Count} merged, {result.ThemeDictionaries.Count} themes");
         return result;
+    }
+
+    /* A TemplateBinding as the content of a button or presenter (<ToggleButton><TemplateBinding Property="Header"/></ToggleButton>):
+     * Uno's reader takes the markup extension in an attribute, so it becomes Content="{TemplateBinding Header}". */
+    static void ContentTemplateBindings(XElement dict)
+    {
+        string[] holders = ["ToggleButton", "Button", "ContentControl", "ContentPresenter", "HyperlinkButton", "RepeatButton", "CheckBox", "RadioButton"];
+        foreach (var binding in dict.Descendants().Where(e => e.Name.LocalName == "TemplateBinding" && e.Parent != null &&
+                                                              holders.Contains(e.Parent.Name.LocalName) && !e.Parent.Name.LocalName.Contains('.')).ToList())
+        {
+            var parent = binding.Parent!;
+            var property = binding.Attribute("Property")?.Value;
+            if (property == null || parent.Attribute("Content") != null) continue;
+            parent.SetAttributeValue("Content", "{TemplateBinding " + property + "}");
+            binding.Remove();
+        }
+        /* <SettingsCard.Header><TemplateBinding Property="Header"/></SettingsCard.Header> is Header="{TemplateBinding Header}" */
+        foreach (var element in dict.Descendants().Where(e => e.Name.LocalName.Contains('.') && e.Parent != null && e.Nodes().Count() == 1 &&
+                                                              e.FirstNode is XElement { Name.LocalName: "TemplateBinding" }).ToList())
+        {
+            var dot = element.Name.LocalName.IndexOf('.');
+            var owner = element.Name.LocalName[..dot];
+            var member = element.Name.LocalName[(dot + 1)..];
+            var parent = element.Parent!;
+            var property = ((XElement)element.FirstNode!).Attribute("Property")?.Value;
+            if (property == null || parent.Name.LocalName != owner || member.Contains('.') || parent.Attribute(member) != null) continue;
+            parent.SetAttributeValue(member, "{TemplateBinding " + property + "}");
+            element.Remove();
+        }
+    }
+
+    /* <Setter Property="Resources"> in a style (the resources of the control: the theme brushes its template reads) has no
+     * property to set in Uno; the dictionary becomes one merged into the dictionary that holds the style, where the
+     * template's theme resources find it. */
+    static void HoistStyleResources(XElement dict)
+    {
+        foreach (var setter in dict.Descendants().Where(e => e.Name.LocalName == "Setter" && e.Attribute("Property")?.Value == "Resources").ToList())
+        {
+            var value = setter.Elements().FirstOrDefault(e => e.Name.LocalName == "Setter.Value")?.Elements().FirstOrDefault(e => e.Name.LocalName == "ResourceDictionary");
+            if (value == null) continue;
+            var root = setter.Ancestors().LastOrDefault(e => e.Name.LocalName == "ResourceDictionary") ?? dict;
+            var merged = root.Elements().FirstOrDefault(e => e.Name.LocalName == "ResourceDictionary.MergedDictionaries");
+            if (merged == null)
+            {
+                merged = new XElement(root.Name.Namespace + "ResourceDictionary.MergedDictionaries");
+                root.AddFirst(merged);
+            }
+            var copy = new XElement(value);
+            /* the implicit styles of the control's own scope would apply everywhere */
+            foreach (var implicitStyle in copy.Elements().Where(e => e.Name.LocalName == "Style" && e.Attribute(X + "Key") == null).ToList())
+                implicitStyle.Remove();
+            foreach (var ns in value.Ancestors().Reverse().SelectMany(a => a.Attributes()).Where(a => a.IsNamespaceDeclaration))
+                if (copy.Attribute(ns.Name) == null) copy.SetAttributeValue(ns.Name, ns.Value);
+            merged.Add(copy);
+            setter.Remove();
+        }
     }
 
     static string FirstLine(Exception e) => e.GetType().Name + ": " + e.Message.Split('\n')[0];
