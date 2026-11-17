@@ -68,7 +68,20 @@ public static class Events
             {
                 Ccw.Log($"event handler returned {hr:x8} ({owner.RuntimeClassName} {(owner.UnoObject as Microsoft.UI.Xaml.FrameworkElement)?.Name}.{name})");
                 if (args is Microsoft.UI.Xaml.DataContextChangedEventArgs dc)
-                    Ccw.Log($"  DataContext of {sender?.GetType().Name} {(sender as Microsoft.UI.Xaml.FrameworkElement)?.Name}: new {dc.NewValue?.GetType().FullName ?? "null"} {dc.NewValue}");
+                {
+                    int q = Ccw.QueryInterface(s, Iids.UI_Xaml_IFrameworkElement, out var fe);
+                    if (q >= 0) Ccw.ComRelease(fe);
+                    Ccw.Log($"  sender {s:x} args {a:x} QI(IFrameworkElement) {q:x8}");
+                }
+                if (args is Microsoft.UI.Xaml.DataContextChangedEventArgs dcn && dcn.NewValue is NativeObject nobj)
+                    unsafe
+                    {
+                        IntPtr h = IntPtr.Zero;
+                        int hn = ((delegate* unmanaged[Stdcall]<IntPtr, IntPtr*, int>)(*(IntPtr**)nobj.Pointer)[4])(nobj.Pointer, &h);
+                        Ccw.Log($"  NewValue pointer {nobj.Pointer:x} class {(hn >= 0 ? HString.Read(h) : hn.ToString("x8", System.Globalization.CultureInfo.InvariantCulture))}");
+                    }
+                if (args is Microsoft.UI.Xaml.DataContextChangedEventArgs dc2)
+                    Ccw.Log($"  DataContext of {sender?.GetType().Name} {(sender as Microsoft.UI.Xaml.FrameworkElement)?.Name}: new {dc2.NewValue?.GetType().FullName ?? "null"} {dc2.NewValue}");
             }
         }
         catch (Exception e)

@@ -232,3 +232,5 @@ Windows.UI.Text.FontWeights
 Windows.UI.Xaml.DataTemplate
 --class
 Windows.UI.Xaml.DataContextChangedEventArgs
+--class
+Windows.UI.Xaml.Markup.XamlBindingHelper

@@ -30,6 +30,7 @@ public static unsafe class XamlConnection
     public static void SetHost(Mux.DependencyObject o, string? value) => o.SetValue(HostProperty, value);
 
     static readonly Dictionary<string, IntPtr> hosts = new();
+    [ThreadStatic] static IntPtr lastBindings;
 
     /* the application's component (AddRef'd) of a loaded file; a later load of the same file replaces it */
     public static void Register(string host, IntPtr component)
@@ -58,11 +59,22 @@ public static unsafe class XamlConnection
             {
                 int hb = UI_Xaml_Markup_IComponentConnector2_Call.GetBindingConnector(connector2, id, p, &bindings);
                 Ccw.ComRelease(connector2);
+                if (Ccw.Calls) Ccw.Log($"GetBindingConnector {id} of a template: {hb:x8} {(bindings != IntPtr.Zero ? "bindings" : "none")}");
                 if (hb < 0) bindings = IntPtr.Zero;
             }
             int hr = UI_Xaml_Markup_IComponentConnector_Call.Connect(connector, id, p);
-            int hc = bindings != IntPtr.Zero ? UI_Xaml_Markup_IComponentConnector_Call.Connect(bindings, id, p) : 0;
-            Ccw.Log($"Connect {id} {element.GetType().Name} of a template in {host}: {hr:x8}" + (bindings != IntPtr.Zero ? $", bindings {hc:x8}" : ""));
+            /* the bindings of the template instance being built: the root's id gives them, the ids of its children (built after it)
+             * are connected to the same object (a switch on ids that are not its own does nothing) */
+            IntPtr target = bindings;
+            if (bindings != IntPtr.Zero)
+            {
+                Ccw.ComAddRef(bindings);
+                if (lastBindings != IntPtr.Zero) Ccw.ComRelease(lastBindings);
+                lastBindings = bindings;
+            }
+            else target = lastBindings;
+            int hc = target != IntPtr.Zero ? UI_Xaml_Markup_IComponentConnector_Call.Connect(target, id, p) : 0;
+            Ccw.Log($"Connect {id} {element.GetType().Name} of a template in {host}: {hr:x8}" + (target != IntPtr.Zero ? $", bindings {hc:x8}" + (bindings == IntPtr.Zero ? " (of the template)" : "") : ""));
         }
         finally
         {

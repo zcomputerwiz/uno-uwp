@@ -381,6 +381,17 @@ public static unsafe partial class XbfLoader
      * the application namespace that has it */
     internal static void QualifyTargetTypes(XElement root)
     {
+        /* an ItemsStackPanel in the panel of a plain ItemsControl (the Calculator's expression tokens): it is made for ListView and
+         * stays zero wide in Uno's ItemsControl; the StackPanel is what it stands for there */
+        foreach (var panel in root.DescendantsAndSelf().Where(e => e.Name.LocalName == "ItemsStackPanel").ToList())
+        {
+            if (panel.Parent?.Name.LocalName != "ItemsPanelTemplate" || panel.Parent.Parent?.Name.LocalName != "ItemsControl.ItemsPanel" ||
+                panel.Parent.Parent.Parent?.Name.LocalName != "ItemsControl") continue;
+            panel.Name = panel.Name.Namespace + "StackPanel";
+            foreach (var a in panel.Attributes().Where(a => a.Name.LocalName is "ItemsUpdatingScrollMode" or "CacheLength" or "AreStickyGroupHeadersEnabled" or
+                                                           "GroupHeaderPlacement" or "GroupPadding").ToList())
+                a.Remove();
+        }
         /* an application type of that name wins over Uno's (the Calculator's TitleBar, Uno's Controls.TitleBar) */
         foreach (var e in root.DescendantsAndSelf())
         {

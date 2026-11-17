@@ -41,3 +41,38 @@ public unsafe partial class UI_Xaml_DataTemplate_Factory
         return 0;
     }
 }
+
+/* XamlBindingHelper.Set/GetDataTemplateComponent: the same for the application's IDataTemplateComponent of a root element */
+public unsafe partial class UI_Xaml_Markup_XamlBindingHelper_Factory
+{
+    sealed class Holder(IntPtr pointer)
+    {
+        public readonly IntPtr Pointer = pointer;
+        ~Holder() { Ccw.ComRelease(Pointer); }
+    }
+
+    static readonly ConditionalWeakTable<object, Holder> components = new();
+
+    int IUI_Xaml_Markup_IXamlBindingHelperStatics_Abi.SetDataTemplateComponent(IntPtr element, IntPtr value)
+    {
+        if (Boxing.Unbox(element) is not { } target) return unchecked((int)0x80070057);
+        components.Remove(target);
+        if (value != IntPtr.Zero)
+        {
+            Ccw.ComAddRef(value);
+            components.Add(target, new Holder(value));
+        }
+        return 0;
+    }
+
+    int IUI_Xaml_Markup_IXamlBindingHelperStatics_Abi.GetDataTemplateComponent(IntPtr element, IntPtr* result)
+    {
+        *result = IntPtr.Zero;
+        if (Boxing.Unbox(element) is { } target && components.TryGetValue(target, out var holder))
+        {
+            Ccw.ComAddRef(holder.Pointer);
+            *result = holder.Pointer;
+        }
+        return 0;
+    }
+}
