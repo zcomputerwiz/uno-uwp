@@ -9,6 +9,9 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using Mux = Microsoft.UI.Xaml;
+using MuxControls = Microsoft.UI.Xaml.Controls;
+using MuxMedia = Microsoft.UI.Xaml.Media;
 
 namespace XamlShim.Abi;
 
@@ -238,8 +241,59 @@ public static unsafe class CoreWindowHost
         SetFocus(child);
         int hr = UI_Core_ICoreWindow_Call.Activate(FrameworkView.CoreWindow);
         Ccw.Log($"Uno window {child:x} placed in the CoreWindow {core:x} ({found.Count} candidates), CoreWindow.Activate {hr:x8}");
+        HookThemeBackground();
         ScheduleDrawCheck();
         return true;
+    }
+
+
+    /* ApplicationPageBackgroundThemeBrush of a theme, from the application's dictionaries (the Light and Default theme dictionaries; the
+     * Default one is the dark theme) */
+    static MuxMedia.Brush? PageBrush(Mux.ElementTheme theme)
+    {
+        string[] names = theme == Mux.ElementTheme.Dark ? ["Dark", "Default"] : ["Light", "Default"];
+        const string key = "ApplicationPageBackgroundThemeBrush";
+        MuxMedia.Brush? Find(Mux.ResourceDictionary d, int depth)
+        {
+            if (depth > 12) return null;
+            foreach (var name in names)
+                if (d.ThemeDictionaries.TryGetValue(name, out var td) && td is Mux.ResourceDictionary t)
+                    foreach (var kv in t)
+                        if (kv.Key as string == key && kv.Value is MuxMedia.Brush b) return b;
+            foreach (var m in d.MergedDictionaries) if (Find(m, depth + 1) is { } found) return found;
+            return null;
+        }
+        return Mux.Application.Current?.Resources is { } resources ? Find(resources, 0) : null;
+    }
+
+    /* the window's own background (Uno's root visual) follows the content's theme: Uno updates it when the application's theme
+     * changes, an application that sets RequestedTheme on its root element (the Calculator's theme choice) changes only that
+     * element's */
+    static void HookThemeBackground()
+    {
+        if (Mux.Window.Current?.Content is not Mux.FrameworkElement top) return;
+        void Apply()
+        {
+            var brush = PageBrush(top.ActualTheme == Mux.ElementTheme.Dark ? Mux.ElementTheme.Dark : Mux.ElementTheme.Light);
+            if (Ccw.Tracing) Ccw.Log($"theme: content theme {top.ActualTheme}, page brush {(brush as MuxMedia.SolidColorBrush)?.Color.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"}");
+            if (brush == null) return;
+            Mux.DependencyObject? p = top;
+            var chain = new StringBuilder();
+            while (p != null)
+            {
+                chain.Append(p.GetType().FullName).Append(" > ");
+                if (p.GetType().Name is "RootVisual" or "XamlIslandRoot" && p is MuxControls.Panel panel)
+                {
+                    panel.Background = brush;
+                    if (Ccw.Tracing) Ccw.Log($"theme: the window background follows the content's theme {top.ActualTheme}: {(brush as MuxMedia.SolidColorBrush)?.Color.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+                    return;
+                }
+                p = MuxMedia.VisualTreeHelper.GetParent(p);
+            }
+            if (Ccw.Tracing) Ccw.Log($"theme: no root visual above the content: {chain}");
+        }
+        top.ActualThemeChanged += (_, _) => Apply();
+        top.RegisterPropertyChangedCallback(Mux.FrameworkElement.RequestedThemeProperty, (_, _) => Apply());
     }
 
     [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr hwnd);
@@ -299,11 +353,12 @@ public static unsafe class CoreWindowHost
             void Search(Microsoft.UI.Xaml.ResourceDictionary d, string key, string path, int depth)
             {
                 if (depth > 12) return;
-                if (d.ContainsKey(key)) Ccw.Log($"  theme key {key}: {path} top level = {Show(d[key])}");
+                if (depth <= 2 && key == themeKeys!.Split(',')[0]) Ccw.Log($"  dictionary {path}: {d.Count} entries, themes [{string.Join(", ", d.ThemeDictionaries.Select(t => t.Key + "=" + ((t.Value as Microsoft.UI.Xaml.ResourceDictionary)?.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? t.Value?.GetType().FullName)))}], source {d.Source}");
+                foreach (var kv in d) if (kv.Key as string == key) Ccw.Log($"  theme key {key}: {path} top level = {Show(kv.Value)}");
                 foreach (var td in d.ThemeDictionaries)
                     if (td.Value is Microsoft.UI.Xaml.ResourceDictionary t)
                     {
-                        if (t.ContainsKey(key)) Ccw.Log($"  theme key {key}: {path} theme {td.Key} = {Show(t[key])}");
+                        foreach (var kv in t) if (kv.Key as string == key) Ccw.Log($"  theme key {key}: {path} theme {td.Key} = {Show(kv.Value)}");
                         foreach (var m in t.MergedDictionaries) Search(m, key, $"{path} theme {td.Key} merged", depth + 1);
                     }
                 int i = 0;
@@ -318,6 +373,31 @@ public static unsafe class CoreWindowHost
         timer.Tick += (_, _) =>
         {
             LogThemeKeys();
+            if (!string.IsNullOrEmpty(themeKeys) && Microsoft.UI.Xaml.Window.Current?.Content is { } themeRoot)
+            {
+                void Backgrounds(Microsoft.UI.Xaml.DependencyObject d, int level, string label)
+                {
+                    var f = d as Microsoft.UI.Xaml.FrameworkElement;
+                    Microsoft.UI.Xaml.Media.Brush? b = d switch
+                    {
+                        Microsoft.UI.Xaml.Controls.Panel p => p.Background,
+                        Microsoft.UI.Xaml.Controls.Control c => c.Background,
+                        Microsoft.UI.Xaml.Controls.Border bd => bd.Background,
+                        _ => null
+                    };
+                    Ccw.Log($"  background {label}{new string(' ', level)}{d.GetType().Name} {f?.Name} theme {f?.ActualTheme} requested {f?.RequestedTheme} = {(b is Microsoft.UI.Xaml.Media.SolidColorBrush sb ? sb.Color.ToString(System.Globalization.CultureInfo.InvariantCulture) : b?.GetType().Name ?? "null")}");
+                    if (level >= 5) return;
+                    int n = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(d);
+                    for (int i = 0; i < n && i < 4; i++) Backgrounds(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(d, i), level + 1, label);
+                }
+                try
+                {
+                Backgrounds(themeRoot, 0, "window ");
+                foreach (var popup in Microsoft.UI.Xaml.Media.VisualTreeHelper.GetOpenPopupsForXamlRoot(themeRoot.XamlRoot))
+                    if (popup.Child is { } popupChild) Backgrounds(popupChild, 0, "popup ");
+                }
+                catch (Exception ex) { Ccw.Log($"  background diagnostics: {ex.GetType().Name} {ex.Message}"); }
+            }
             /* the content of the open popups: pointer input there does not reach the window's content element */
             if (!string.IsNullOrEmpty(hitPoints) && Microsoft.UI.Xaml.Window.Current?.Content is { } popupRoot)
                 foreach (var popup in Microsoft.UI.Xaml.Media.VisualTreeHelper.GetOpenPopupsForXamlRoot(popupRoot.XamlRoot))
