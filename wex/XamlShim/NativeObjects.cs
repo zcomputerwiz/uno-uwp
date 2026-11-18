@@ -108,7 +108,22 @@ public static unsafe class NativeObjects
             var converted = Boxing.Unbox(result);
             /* an enumeration (Visibility) comes boxed as its underlying integer */
             var target = Nullable.GetUnderlyingType(targetType) ?? targetType;
-            if (converted != null && target.IsEnum && converted.GetType() != target) converted = Enum.ToObject(target, converted);
+            if (converted != null && target.IsEnum && converted.GetType() != target)
+            {
+                if (converted is Enum other) converted = Enum.ToObject(target, System.Convert.ToInt64(other, System.Globalization.CultureInfo.InvariantCulture));
+                else if (converted.GetType().IsPrimitive) converted = Enum.ToObject(target, converted);
+                /* a boxed enumeration of the framework (IReference<Visibility>, which a C++/CX converter returns) */
+                else if (converted is NativeObject boxed && target.FullName is { } enumName && enumName.StartsWith("Microsoft.UI.Xaml.", StringComparison.Ordinal) &&
+                         Ccw.QueryInterface(boxed.Pointer, PInterface.Iid("pinterface({61c17706-2d65-11e0-9ae8-d48564015472};enum(Windows.UI.Xaml." +
+                                                                        enumName["Microsoft.UI.Xaml.".Length..] + ";i4))"), out var reference) >= 0)
+                {
+                    int number;
+                    int got = ((delegate* unmanaged[Stdcall]<IntPtr, int*, int>)(*(IntPtr**)reference)[6])(reference, &number);
+                    Ccw.ComRelease(reference);
+                    converted = got >= 0 ? Enum.ToObject(target, number) : Microsoft.UI.Xaml.DependencyProperty.UnsetValue;
+                }
+                else { Ccw.Log($"{self.GetType().Name}.Convert returned {converted.GetType().FullName} for {target.Name}"); converted = Microsoft.UI.Xaml.DependencyProperty.UnsetValue; }
+            }
             if (Ccw.Calls) Ccw.Log($"{self.GetType().Name}.{(back ? "ConvertBack" : "Convert")}({value ?? "null"} {value?.GetType().Name}) -> {converted ?? "null"} {converted?.GetType().Name} for {targetType.Name}");
             return converted;
         }

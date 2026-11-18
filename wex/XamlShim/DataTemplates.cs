@@ -98,6 +98,14 @@ public unsafe partial class UI_Xaml_Markup_XamlMarkupHelper_Factory
 
 public unsafe partial class UI_Xaml_FrameworkElement
 {
+    int IUI_Xaml_IFrameworkElement_Abi.get_DataContext(IntPtr* result)
+    {
+        var value = Reflect.Get(this, "DataContext");
+        *result = Boxing.Box(value);
+        if (Ccw.Calls) Ccw.Log($"get_DataContext of {UnoObject?.GetType().Name} {(UnoObject as Microsoft.UI.Xaml.FrameworkElement)?.Name}: {value?.GetType().Name ?? "null"} -> {*result:x}");
+        return 0;
+    }
+
     int IUI_Xaml_IFrameworkElement_Abi.FindName(IntPtr name, IntPtr* result)
     {
         var found = Reflect.Call(this, "FindName", new object?[] { HString.Read(name) });
@@ -108,6 +116,17 @@ public unsafe partial class UI_Xaml_FrameworkElement
             if (Ccw.Calls) Ccw.Log($"FindName: {element.GetType().Name} {(element as Microsoft.UI.Xaml.FrameworkElement)?.Name} loaded again, visibility {visibility}");
         }
         *result = Boxing.Box(found);
+        return 0;
+    }
+}
+
+/* the application's Visibility changes, by element (lab trace) */
+public unsafe partial class UI_Xaml_UIElement
+{
+    int IUI_Xaml_IUIElement_Abi.put_Visibility(int value)
+    {
+        if (Ccw.Calls) Ccw.Log($"put_Visibility {UnoObject?.GetType().Name} {(UnoObject as Microsoft.UI.Xaml.FrameworkElement)?.Name} = {value}");
+        Reflect.Set(this, "Visibility", (long)value);
         return 0;
     }
 }

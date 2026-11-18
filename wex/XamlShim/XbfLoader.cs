@@ -84,6 +84,7 @@ public static unsafe partial class XbfLoader
             QualifyAttachedSetters(element);
             AliasResources(element);
             if (top.Attribute(X + "Name")?.Value is { Length: > 0 } rootName) RootBinding.Rewrite(element, rootName, shimNamespace);
+            BindingAttributes(element);
             using (RootBinding.Begin(shim.UnoObject))
                 built = (Mux.UIElement)Mux.Markup.XamlReader.Load(element.ToString());
         }
@@ -319,6 +320,7 @@ public static unsafe partial class XbfLoader
         ResolveConditionalNamespaces(dict);
         HoistStyleResources(dict);
         ContentTemplateBindings(dict);
+        BindingAttributes(dict);
         MapPackageUris(dict);
         NativeControls.Prepare(dict);
         QualifyTargetTypes(dict);
@@ -384,6 +386,36 @@ public static unsafe partial class XbfLoader
         FixBasedOn(dict, result, result, what);
         Ccw.Log($"{what} resources: {result.Count} entries, {result.MergedDictionaries.Count} merged, {result.ThemeDictionaries.Count} themes");
         return result;
+    }
+
+    /* <Grid.Visibility><Binding Path="P" Converter="{StaticResource K}"/></Grid.Visibility> (XbfKit's form of a binding with a
+     * converter): Uno's reader makes the Binding but leaves its Converter unset, so the converted property keeps the raw value
+     * (both lazy sub-layouts of the Calculator's date page show): ConverterBinding makes it, with the converter looked up
+     * when the binding is evaluated. */
+    static void BindingAttributes(XElement root)
+    {
+        string[] allowed = ["Path", "Mode", "Converter", "ConverterParameter", "ConverterLanguage", "FallbackValue", "TargetNullValue"];
+        foreach (var element in root.Descendants().Where(e => e.Name.LocalName.Contains('.') && e.Parent != null && e.Nodes().Count() == 1 &&
+                                                              e.FirstNode is XElement { Name.LocalName: "Binding", HasElements: false }).ToList())
+        {
+            var dot = element.Name.LocalName.IndexOf('.');
+            var member = element.Name.LocalName[(dot + 1)..];
+            var parent = element.Parent!;
+            var binding = (XElement)element.FirstNode!;
+            if (parent.Name.LocalName != element.Name.LocalName[..dot] || member.Contains('.') || parent.Attribute(member) != null) continue;
+            if (binding.Attributes().Any(a => a.Name.Namespace != XNamespace.None || !allowed.Contains(a.Name.LocalName))) continue;
+            if (binding.Attribute("Converter")?.Value is not { } converter || binding.Attribute("Path")?.Value is not { Length: > 0 } path) continue;
+            var ct = converter.Trim();
+            if (!ct.StartsWith("{StaticResource ", StringComparison.Ordinal) || !ct.EndsWith('}')) continue;
+            var resourceKey = ct["{StaticResource ".Length..^1].Trim();
+            if (resourceKey.Length == 0 || resourceKey.Any(char.IsWhiteSpace) || binding.Attributes().Any(a => a.Name.LocalName is "ConverterLanguage" or "FallbackValue" or "TargetNullValue")) continue;
+            var prm = binding.Attribute("ConverterParameter")?.Value ?? "";
+            if (prm.StartsWith('{') || prm.Contains(';') || prm.Contains('|') || path.Contains(';') || path.Contains('|')) continue;
+            var existing = parent.Attribute(shimNamespace + "ConverterBinding.Bindings")?.Value;
+            var spec = $"{member}={path}|{resourceKey}|{binding.Attribute("Mode")?.Value}|{prm}";
+            parent.SetAttributeValue(shimNamespace + "ConverterBinding.Bindings", existing == null ? spec : existing + ";" + spec);
+            element.Remove();
+        }
     }
 
     /* A TemplateBinding as the content of a button or presenter (<ToggleButton><TemplateBinding Property="Header"/></ToggleButton>):

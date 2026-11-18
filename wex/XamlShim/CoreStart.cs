@@ -378,7 +378,7 @@ public static unsafe class CoreWindowHost
                 foreach (var name in watch.Split(',', StringSplitOptions.RemoveEmptyEntries))
                     if (watchRoot.FindName(name) is Mux.UIElement watched && watchedPopups.Add(watched))
                     {
-                        Ccw.Log($"watch {name}: {watched.GetType().Name} visibility {watched.Visibility}");
+                        Ccw.Log($"watch {name}: {watched.GetType().Name} visibility {watched.Visibility}, binding {((watched as Mux.FrameworkElement)?.GetBindingExpression(Mux.UIElement.VisibilityProperty) is { } be ? "yes " + be.ParentBinding?.Path?.Path + " conv " + be.ParentBinding?.Converter?.GetType().Name : "none")}, data context {(watched as Mux.FrameworkElement)?.DataContext?.GetType().Name ?? "null"}");
                         watched.RegisterPropertyChangedCallback(Mux.UIElement.VisibilityProperty, (_, _) =>
                             Ccw.Log($"watch {name}: visibility -> {watched.Visibility} {new System.Diagnostics.StackTrace(1, false).ToString().Replace("\n", " | ", StringComparison.Ordinal)}"));
                     }

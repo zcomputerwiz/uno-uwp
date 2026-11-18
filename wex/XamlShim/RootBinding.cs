@@ -70,7 +70,7 @@ public static partial class RootBinding
         DependencyProperties.Registered.Where(r => r.Key.Name == name && r.Key.Owner.IsInstanceOfType(source)).Select(r => r.Value).FirstOrDefault()
         ?? PropertyOf(source.GetType(), name);
 
-    static Mux.DependencyProperty? PropertyOf(Type type, string name)
+    internal static Mux.DependencyProperty? PropertyOf(Type type, string name)
     {
         const BindingFlags flags = BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy;
         return type.GetProperty(name + "Property", flags)?.GetValue(null) as Mux.DependencyProperty ??
