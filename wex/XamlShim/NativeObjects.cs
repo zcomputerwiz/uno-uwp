@@ -109,6 +109,7 @@ public static unsafe class NativeObjects
             /* an enumeration (Visibility) comes boxed as its underlying integer */
             var target = Nullable.GetUnderlyingType(targetType) ?? targetType;
             if (converted != null && target.IsEnum && converted.GetType() != target) converted = Enum.ToObject(target, converted);
+            if (Ccw.Calls) Ccw.Log($"{self.GetType().Name}.{(back ? "ConvertBack" : "Convert")}({value ?? "null"} {value?.GetType().Name}) -> {converted ?? "null"} {converted?.GetType().Name} for {targetType.Name}");
             return converted;
         }
         catch (Exception e)

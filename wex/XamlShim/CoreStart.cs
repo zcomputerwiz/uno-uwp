@@ -373,6 +373,15 @@ public static unsafe class CoreWindowHost
         timer.Tick += (_, _) =>
         {
             LogThemeKeys();
+            /* XAMLSHIM_WATCH="Name,Name": the Visibility of these named elements, once found (they appear when a mode is opened) */
+            if (Environment.GetEnvironmentVariable("XAMLSHIM_WATCH") is { Length: > 0 } watch && Mux.Window.Current?.Content is Mux.FrameworkElement watchRoot)
+                foreach (var name in watch.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                    if (watchRoot.FindName(name) is Mux.UIElement watched && watchedPopups.Add(watched))
+                    {
+                        Ccw.Log($"watch {name}: {watched.GetType().Name} visibility {watched.Visibility}");
+                        watched.RegisterPropertyChangedCallback(Mux.UIElement.VisibilityProperty, (_, _) =>
+                            Ccw.Log($"watch {name}: visibility -> {watched.Visibility} {new System.Diagnostics.StackTrace(1, false).ToString().Replace("\n", " | ", StringComparison.Ordinal)}"));
+                    }
             if (!string.IsNullOrEmpty(themeKeys) && Microsoft.UI.Xaml.Window.Current?.Content is { } themeRoot)
             {
                 void Backgrounds(Microsoft.UI.Xaml.DependencyObject d, int level, string label)
