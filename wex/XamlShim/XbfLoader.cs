@@ -325,6 +325,13 @@ public static unsafe partial class XbfLoader
         NativeControls.Prepare(dict);
         QualifyTargetTypes(dict);
         QualifyAttachedSetters(dict);
+        /* Uno's reader resolves a Style's TargetType="local:Type" against the namespaces of the document's root; a file whose
+         * merged dictionaries declare their own prefixes (the toolkit's Generic.xbf) fails as a whole ("x:Object is unknown")
+         * and was loaded entry by entry, which resolves {ThemeResource} while each entry loads. The first declaration of a
+         * prefix moves to the root. */
+        foreach (var declaration in dict.Descendants().SelectMany(d => d.Attributes()).Where(a => a.IsNamespaceDeclaration &&
+                                                                                                a.Name.LocalName != "xmlns").ToList())
+            if (dict.Attribute(declaration.Name) == null) dict.SetAttributeValue(declaration.Name, declaration.Value);
         var deferred = TakeDeferred(dict);
         try
         {
@@ -671,7 +678,12 @@ public static unsafe partial class XbfLoader
                 else if (local == "StaticResource" && key != null && e.Attribute("ResourceKey") is { } target)
                 {
                     e.Remove();
-                    deferred.Add(new(theme, key, (into, root) => Find(into, target.Value) ?? Find(root, target.Value)));
+                    /* an alias inside a theme dictionary names the resource of the same theme: Find alone reads it in the
+                     * application's theme, and the dark (Default) and light dictionaries would both get the light value */
+                    deferred.Add(new(theme, key, (into, root) => InTheme(theme, () =>
+                        (theme != null ? FindInTheme(into, target.Value, theme) ?? FindInTheme(root, target.Value, theme) ??
+                                         FindInTheme(Mux.Application.Current.Resources, target.Value, theme) : null)
+                        ?? Find(into, target.Value) ?? Find(root, target.Value))));
                 }
                 else if (key != null && !e.HasElements && e.Value.Trim().Length > 0 && UnoType(local) is { IsEnum: true } type)
                 {
@@ -693,6 +705,44 @@ public static unsafe partial class XbfLoader
     {
         foreach (var e in root.Descendants().Where(e => e.Name.LocalName == "StaticResource" && e.Attribute("ResourceKey") != null).ToList())
             e.Name = shimNamespace + nameof(ResourceAlias);
+    }
+
+    /* runs the lookup with Uno's ambient requested theme set to the theme dictionary's ("Default" is dark): its resource lookups
+     * read the active theme from there, not from an argument */
+    static object? InTheme(string? theme, Func<object?> lookup)
+    {
+        var scope = theme switch { "Default" => "Dark", "Light" => "Light", _ => null };
+        IDisposable? opened = null;
+        if (scope != null)
+            try
+            {
+                const System.Reflection.BindingFlags any = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic |
+                                                           System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Instance;
+                var core = typeof(Mux.UIElement).Assembly.GetType("Uno.UI.Xaml.Core.CoreServices");
+                var instance = core?.GetProperty("Instance", any)?.GetValue(null);
+                var method = core?.GetMethod("ScopeRequestedThemeForSubTree", any);
+                if (instance != null && method != null)
+                    opened = method.Invoke(instance, [Enum.Parse(method.GetParameters()[0].ParameterType, scope)]) as IDisposable;
+                else Ccw.Log($"theme scope: CoreServices {(core == null ? "not found" : "has no ScopeRequestedThemeForSubTree")}");
+            }
+            catch (Exception e) { Ccw.Log($"theme scope: {FirstLine(e)}"); }
+        try { return lookup(); }
+        finally { opened?.Dispose(); }
+    }
+
+    /* the resource in the theme dictionary named theme ("Default" is the dark one), in the dictionary, its merged
+     * dictionaries and their theme dictionaries */
+    static object? FindInTheme(Mux.ResourceDictionary d, string key, string theme, int depth = 0)
+    {
+        if (depth > 8) return null;
+        if (d.ThemeDictionaries.TryGetValue(theme, out var t) && t is Mux.ResourceDictionary td)
+        {
+            if (td.TryGetValue(key, out var v)) return v;
+            if (FindInTheme(td, key, theme, depth + 1) is { } nested) return nested;
+        }
+        foreach (var m in d.MergedDictionaries)
+            if (FindInTheme(m, key, theme, depth + 1) is { } found) return found;
+        return null;
     }
 
     static object? Find(Mux.ResourceDictionary root, string key) =>
