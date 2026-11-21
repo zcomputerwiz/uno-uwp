@@ -392,6 +392,7 @@ public static unsafe class CoreWindowHost
                         Microsoft.UI.Xaml.Controls.Panel p => p.Background,
                         Microsoft.UI.Xaml.Controls.Control c => c.Background,
                         Microsoft.UI.Xaml.Controls.Border bd => bd.Background,
+                        Microsoft.UI.Xaml.Controls.TextBlock tb => tb.Foreground,
                         _ => null
                     };
                     Ccw.Log($"  background {label}{new string(' ', level)}{d.GetType().Name} {f?.Name} theme {f?.ActualTheme} requested {f?.RequestedTheme} = {(b is Microsoft.UI.Xaml.Media.SolidColorBrush sb ? sb.Color.ToString(System.Globalization.CultureInfo.InvariantCulture) : b?.GetType().Name ?? "null")}");
