@@ -292,8 +292,61 @@ public static unsafe class CoreWindowHost
             }
             if (Ccw.Tracing) Ccw.Log($"theme: no root visual above the content: {chain}");
         }
-        top.ActualThemeChanged += (_, _) => Apply();
-        top.RegisterPropertyChangedCallback(Mux.FrameworkElement.RequestedThemeProperty, (_, _) => Apply());
+        /* the elements below take the new theme after this notification: apply the styles again on the dispatcher */
+        void Later()
+        {
+            Apply();
+            var queue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+            /* the style setters read Uno's ambient theme, which stays the application's (light) when only the root element is dark */
+            queue?.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                () => XbfLoader.InTheme(top.ActualTheme == Mux.ElementTheme.Dark ? "Default" : "Light", () => { ReapplyStyles(top); return null; }));
+        }
+        top.ActualThemeChanged += (_, _) => Later();
+        top.RegisterPropertyChangedCallback(Mux.FrameworkElement.RequestedThemeProperty, (_, _) => Later());
+    }
+
+    /* a style whose BasedOn chain is set after the load (XbfLoader.FixBasedOn) keeps the values its {ThemeResource} setters
+     * had in the theme the page was built in; setting the style again resolves them in the element's current theme */
+    static readonly string[] TextBrushKeys =
+        ["TextFillColorPrimaryBrush", "TextFillColorSecondaryBrush", "TextFillColorTertiaryBrush", "TextFillColorDisabledBrush"];
+
+    static void ReapplyStyles(Mux.FrameworkElement root)
+    {
+        int count = 0;
+        void Walk(Mux.DependencyObject d, int depth)
+        {
+            if (depth > 200) return;
+            if (d is MuxControls.TextBlock f && f.Style is { } style)
+            {
+                f.Style = null;
+                f.Style = style;
+                count++;
+                /* the style's foreground is a brush that was resolved in the light theme (the setter inherited through the
+                 * late BasedOn does not follow the theme): take the same text brush of the element's own theme */
+                if (f.Foreground is MuxMedia.SolidColorBrush current)
+                {
+                    var theme = f.ActualTheme == Mux.ElementTheme.Dark ? "Default" : "Light";
+                    var other = theme == "Default" ? "Light" : "Default";
+                    foreach (var key in TextBrushKeys)
+                        if (XbfLoader.ThemeResource(key, other) is MuxMedia.SolidColorBrush stale && stale.Color == current.Color &&
+                            XbfLoader.ThemeResource(key, theme) is MuxMedia.SolidColorBrush right && right.Color != current.Color)
+                        {
+                            f.Foreground = right;
+                            break;
+                        }
+                }
+            }
+            if (Ccw.Tracing && d is MuxControls.TextBlock t && !string.IsNullOrEmpty(t.Text))
+                Ccw.Log($"  text '{t.Text}' theme {t.ActualTheme} style {(t.Style != null ? "yes" : "none")} foreground {(t.Foreground as MuxMedia.SolidColorBrush)?.Color.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? t.Foreground?.GetType().Name}");
+            int n = MuxMedia.VisualTreeHelper.GetChildrenCount(d);
+            for (int i = 0; i < n; i++) Walk(MuxMedia.VisualTreeHelper.GetChild(d, i), depth + 1);
+        }
+        Walk(root, 0);
+        /* the Settings page is in a popup: not a visual child of the root */
+        if (root.XamlRoot != null)
+            foreach (var popup in MuxMedia.VisualTreeHelper.GetOpenPopupsForXamlRoot(root.XamlRoot))
+                if (popup.Child != null) Walk(popup.Child, 0);
+        if (Ccw.Tracing) Ccw.Log($"theme: styles of {count} text blocks applied again");
     }
 
     [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr hwnd);

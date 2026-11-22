@@ -709,7 +709,7 @@ public static unsafe partial class XbfLoader
 
     /* runs the lookup with Uno's ambient requested theme set to the theme dictionary's ("Default" is dark): its resource lookups
      * read the active theme from there, not from an argument */
-    static object? InTheme(string? theme, Func<object?> lookup)
+    internal static object? InTheme(string? theme, Func<object?> lookup)
     {
         var scope = theme switch { "Default" => "Dark", "Light" => "Light", _ => null };
         IDisposable? opened = null;
@@ -729,6 +729,10 @@ public static unsafe partial class XbfLoader
         try { return lookup(); }
         finally { opened?.Dispose(); }
     }
+
+    /* the application's resource of that key in the theme dictionary named theme ("Default" is the dark one) */
+    internal static object? ThemeResource(string key, string theme) =>
+        Mux.Application.Current?.Resources is { } resources ? FindInTheme(resources, key, theme) : null;
 
     /* the resource in the theme dictionary named theme ("Default" is the dark one), in the dictionary, its merged
      * dictionaries and their theme dictionaries */
